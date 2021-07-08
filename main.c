@@ -2,10 +2,12 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <math.h>
 
 #define BUFFER_SIZE 256
 // backtrack needed because what may look like a departure position may be destination position
-#define BACKTRACK_SIZE 8 
+#define BACKTRACK_SIZE 8
 #define ERROR_MESSAGE_SIZE 256
 
 typedef enum {white, black} playerSide;
@@ -486,6 +488,8 @@ parseResult parse_until(parser p, parserState untilState) {
                         sprintf(errorMessage, "%s", res.errorMessage);
                         continue;
                     }
+                } else {
+                    p.currentMove->probability = 100;
                 }
                 p.state = parseAlgebraicNotation;
                 break;
@@ -648,8 +652,13 @@ parseResult parse_until(parser p, parserState untilState) {
                     decisionLevel += 1;
                     res = read_tab(&p);
                 }
-                while (p.currentMove->decisionLevel != decisionLevel - 1) {
-                    p.currentMove = p.currentMove->previousMove; 
+
+                while (p.currentMove->decisionLevel != decisionLevel - 1 && p.currentMove != NULL) {
+                    p.currentMove = p.currentMove->previousMove;
+                }
+                if (p.currentMove == NULL) {
+                    fprintf(stderr, "indentation error. Make sure you use tabs instead of spaces.\n");
+                    exit(1);
                 }
                 p.decisionLevel = decisionLevel;
                 p.state = beginParseMoveState;
@@ -771,9 +780,30 @@ void print_tree(move* m) {
     }
 }
 
+double random_probability() {
+    return (double)rand() / (double)RAND_MAX;
+}
+
 move* choose_move(move* currentMove) {
-    // TODO: other choices
-    return currentMove->firstChoice;
+    double totalProbabilityWeight = 0;
+    move* choice = currentMove->firstChoice;
+    while (choice != NULL) {
+        totalProbabilityWeight += choice->probability;
+        choice = choice->nextChoice;
+    }
+
+    double targetWeight = random_probability() * totalProbabilityWeight;
+    double currentWeight = 0;
+    choice = currentMove->firstChoice;
+    while (choice != NULL) {
+        currentWeight += choice->probability;
+        if (currentWeight > targetWeight) {
+            return choice;
+        }
+        choice = choice->nextChoice;
+    }
+
+    return choice;
 }
 
 // compares only curent move, not child/parent choices
@@ -792,7 +822,19 @@ move* apply_move(move* moveTree, move* newMove) {
     return NULL;
 }
 
+void* random_array_choice(void** choices, int numChoices) {
+    int choiceNum = (int)floor(random_probability() * numChoices);
+    return choices[choiceNum];
+}
+
+void greet() {
+    char* greetings[3] = {"Let's play chess!", "Good luck, have fun!", "Let's go!"};
+    char* s = (char*)random_array_choice((void**)greetings, 3);
+    printf("%s\n", s);
+}
+
 void play(move* tree, playerSide userSide) {
+    greet();
     setvbuf(stdin, NULL, _IOLBF, -1);
     move* currentMove = tree;
     while (currentMove != NULL) {
@@ -803,6 +845,7 @@ void play(move* tree, playerSide userSide) {
         }
         // printf("\n");
         while (true) {
+            printf("> ");
             parseResult res = parse_algebraic_notation(stdin);
             // printf("got move:\n");
             // print_algebraic_notation(res.moveTreeRoot);
@@ -820,6 +863,7 @@ void play(move* tree, playerSide userSide) {
 
 
 int main() {
+    srand(time(0));
     FILE* fp = fopen("variants.txt", "r");
     parseResult res = parse_variants(fp);
     if (res.hasError) {

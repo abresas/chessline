@@ -1,21 +1,8 @@
-e4 e5 Nf3 Nc6 Bb5 Nf6 O-O Nxe4 Re1 Nf6 Nxe5 Nxe5 d4
-	41% c6 dxe5
-		80% Nd5 Nd2
-			cxb5 Ne4 
-				Nc7 Bg5
-					f6 exf6
-						gxf6 Nd6#
-						d5
-							fxg7 bxg7 Nc5+ Kf7 Qh5+ Kg8 Bxd8
-							Qd7 Nd6#
-							Be7 Nf6+ Kf7 gxh8=Q Qxh8 Qh5+ Kf8 Bh6+ Qg7 Bxg7 Kxg7 Rxe7+ Kxf6 Qe5+ Kg6 Rg7+ Kh6 Qg5#
-					Be7 Nd6+ Kf8 Qh5 g6 Qf3 f5 exf6 bxd6 bh6+ Kf7 Re7+ Bxe7 fxe7+ Kxe7 Bg5+ Ke8 Bxd8
-				Nf6 Nxf6+
-					Qxf6 exf6+ Kd8 fxg7 Bc5 gxh8=Q+
-					gxf6 exf6+ Qe7 Rxe7+ Qd6 Bxe7 Qxe7+ Kc7 Bf4+ Kb6 Qd6+ Ka5 Bd2+ b4 Qxb4+ a6 Qa5#
-					Kb6 Kf6+ gxf6 exf6+ Be7 Qd6 Kd5 Qxd5 d6 Rxe7+ Qxe7 fxe7
-		10% Kg8 Bc4 Bc5 Kd2
-		10% cxb5 exf6+ Be7 Qd6 O-O fxe7 Qxe7 Qxe7
-	26% Be7 dxe5
-		66% Kg8
-		33% Kd5
+e4 e5 Nf3 Nc6 Bb5
+	33% Nf6 O-O
+		Nxe5 Re1
+			20% d6 d4
+			40% Nf6 Nd2
+			40% Nd6 Nxe6
+	33% d6 d4 dxe5 dxe5
+	33% a6 Bxc6
