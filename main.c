@@ -8,6 +8,7 @@
 #define BACKTRACK_SIZE 8 
 #define ERROR_MESSAGE_SIZE 256
 
+typedef enum {white, black} playerSide;
 typedef enum {pawn, knight, bishop, rook, queen, king} pieceEnum;
 typedef enum {aFile = 1, bFile = 2, cFile = 3, dFile = 4, eFile = 5, fFile = 6, gFile = 7, hFile = 8} chessFile;
 
@@ -163,24 +164,35 @@ parseResult make_parse_result(move* moveTreeRoot) {
 int read_buffer_initial(parser* p) {
     // fprintf(stderr, "read_buffer_initial()\n");
     p->bufferCursor = 0;
-    size_t num = fread(p->buffer, 1, BUFFER_SIZE, p->file);
-    p->bufferSize = num;
-    return num;
+    char* buf = fgets(p->buffer, BUFFER_SIZE, p->file);
+    if (buf) {
+        // printf("got bufer %s\n", buf);
+        p->bufferSize = strlen(p->buffer);
+        return p->bufferSize;
+    } else {
+        return 0;
+    }
 }
 
 int read_buffer(parser* p) {
     // fprintf(stderr, "read_buffer()\n");
     // copy last n characters to the beginning of the buffer (memory)
-    strncpy(p->buffer, p->buffer + BUFFER_SIZE - BACKTRACK_SIZE, BACKTRACK_SIZE);
+    strncpy(p->buffer, p->buffer + p->bufferSize - BACKTRACK_SIZE, BACKTRACK_SIZE);
 
     // reset cursor
     p->bufferCursor = BACKTRACK_SIZE;
 
     // write after the memory section enough bytes to fill buffer
-    int num = fread(p->buffer + BACKTRACK_SIZE, 1, BUFFER_SIZE-BACKTRACK_SIZE, p->file);
-    p->bufferSize = BACKTRACK_SIZE + num;
+    char* buf = fgets(p->buffer + BACKTRACK_SIZE, BUFFER_SIZE-BACKTRACK_SIZE, p->file);
+    if (buf != NULL) {
+        // fprintf(stderr, "new buffer '%s'\n", p->buffer);
+        p->bufferSize = strlen(p->buffer);
+        return p->bufferSize;
+    } else {
+        // fprintf(stderr, "failed to read buffer\n");
+        return 0;
+    }
     // fprintf(stderr, "got %d bytes\n", num);
-    return num;
 }
 
 int read_buffer_if_needed(parser* p) {
@@ -389,14 +401,7 @@ readResult read_dash(parser* p) {
     return read_character(p, '-');
 }
 
-parseResult parse_variants(FILE* file) {
-    // fprintf(stderr, "parse_variants()\n");
-    int digit;
-    int decisionLevel = 0;
-    readResult res;
-    move* newMove;
-    parserAttempt newAttempt;
-
+parser make_parser(FILE* file) {
     parser p;
     p.file = file;
     p.state = startState;
@@ -407,6 +412,16 @@ parseResult parse_variants(FILE* file) {
     p.decisionLevel = 0;
     p.totalCharacterCount = 0;
     p.attemptStack.top = -1;
+    return p;
+}
+
+parseResult parse_until(parser p, parserState untilState) {
+    // fprintf(stderr, "parse_until()\n");
+    int digit;
+    int decisionLevel = 0;
+    readResult res;
+    move* newMove;
+    parserAttempt newAttempt;
 
     if (read_buffer_initial(&p) <= 0) {
         return make_parse_error(&p, "cannot read file");
@@ -416,15 +431,15 @@ parseResult parse_variants(FILE* file) {
     sprintf(errorMessage, "");
     bool failed = false;
 
-    while (p.state != endState) {
-        fprintf(stderr, "State: %s Line: %d Column: %d Buffer offset: %d\n", state_to_string(p.state), p.line, p.column, p.bufferCursor);
+    while (p.state != untilState) {
+        // fprintf(stderr, "State: %s Line: %d Column: %d Buffer offset: %d\n", state_to_string(p.state), p.line, p.column, p.bufferCursor);
         if (strcmp(errorMessage, "") != 0) {
             // got error, see if we need to backtrack
             parserAttempt* att = pop_attempt(&p.attemptStack);
             if (att != NULL) {
                 // NOTE: the attempts must not have altered move tree
                 int shiftAmount = p.totalCharacterCount - att->initialCharacterCount;
-                fprintf(stderr, "Attempt failed, backtracking to state %s and shifting input by %d\n", state_to_string(att->stateOnFailure), shiftAmount);
+                // fprintf(stderr, "Attempt failed, backtracking to state %s and shifting input by %d\n", state_to_string(att->stateOnFailure), shiftAmount);
                 p.state = att->stateOnFailure;
                 p.line = att->line;
                 p.column = att->column;
@@ -651,6 +666,17 @@ parseResult parse_variants(FILE* file) {
     return make_parse_result(p.moveTree);
 }
 
+parseResult parse_algebraic_notation(FILE* file) {
+    parser p = make_parser(file);
+    p.state = parseAlgebraicNotation;
+    return parse_until(p, finishParseMoveState);
+}
+
+parseResult parse_variants(FILE* file) {
+    parser p = make_parser(file);
+    return parse_until(p, endState);
+}
+
 void print_position(position pos) {
     switch (pos.file) {
         case aFile:
@@ -705,16 +731,7 @@ void print_piece(pieceEnum p) {
     }
 }
 
-void print_tree(move* m) {
-    if (m->previousMove && m->previousMove->decisionLevel != m->decisionLevel) {
-        printf("\n");
-        for (int i = 0; i < m->decisionLevel; ++i) {
-            printf("\t");
-        }
-    }
-    if (m->probability != 0) {
-        printf("%d%% ", m->probability);
-    }
+void print_algebraic_notation(move* m) {
     if (m->departurePosition.file || m->departurePosition.rank) {
         print_position(m->departurePosition);
     }
@@ -733,6 +750,19 @@ void print_tree(move* m) {
     if (m->isCheckmate) {
         printf("#");
     }
+}
+
+void print_tree(move* m) {
+    if (m->previousMove && m->previousMove->decisionLevel != m->decisionLevel) {
+        printf("\n");
+        for (int i = 0; i < m->decisionLevel; ++i) {
+            printf("\t");
+        }
+    }
+    if (m->probability != 0) {
+        printf("%d%% ", m->probability);
+    }
+    print_algebraic_notation(m);
     printf(" ");
     move*c = m->firstChoice;
     while (c != NULL) {
@@ -741,11 +771,60 @@ void print_tree(move* m) {
     }
 }
 
+move* choose_move(move* currentMove) {
+    // TODO: other choices
+    return currentMove->firstChoice;
+}
+
+// compares only curent move, not child/parent choices
+bool moves_equal(move* m1, move* m2) {
+    return m1->departurePosition.rank == m2->departurePosition.rank && m1->departurePosition.file == m2->departurePosition.file && m1->piece == m2->piece && m1->destination.rank == m2->destination.rank && m1->destination.file == m2->destination.file;
+}
+
+move* apply_move(move* moveTree, move* newMove) {
+    move* c = moveTree->firstChoice;
+    while (c != NULL) {
+        if (moves_equal(c, newMove)) {
+            return c;
+        }
+        c = c->nextChoice;
+    }
+    return NULL;
+}
+
+void play(move* tree, playerSide userSide) {
+    setvbuf(stdin, NULL, _IOLBF, -1);
+    move* currentMove = tree;
+    while (currentMove != NULL) {
+        // printf("currentMove:\n");
+        if (!currentMove->isRoot) {
+            print_algebraic_notation(currentMove);
+            printf("\n");
+        }
+        // printf("\n");
+        while (true) {
+            parseResult res = parse_algebraic_notation(stdin);
+            // printf("got move:\n");
+            // print_algebraic_notation(res.moveTreeRoot);
+            move* goToMove = apply_move(currentMove, res.moveTreeRoot);
+            if (goToMove == NULL) {
+                printf("wrong move! try again:\n");
+            } else {
+                currentMove = goToMove;
+                break;
+            }
+        }
+        currentMove = choose_move(currentMove);
+    }
+}
+
+
 int main() {
     FILE* fp = fopen("variants.txt", "r");
     parseResult res = parse_variants(fp);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
     }
-    print_tree(res.moveTreeRoot->firstChoice);
+    // print_tree(res.moveTreeRoot->firstChoice);
+    play(res.moveTreeRoot, white);
 }
