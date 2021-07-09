@@ -1087,9 +1087,10 @@ void print_board(sidedPiece board[8][8]) {
         // last rank hidden if not a lot of whitespace
         wprintf(L"\e[0m\n");
     }
+    wprintf(L"\n");
 }
 
-void play(move* tree, playerSide userSide) {
+void play(move* tree, playerSide userSide, bool blindMode) {
     board theBoard = make_board();
     //print_board(theBoard.board);
     wprintf(L"\n");
@@ -1097,8 +1098,9 @@ void play(move* tree, playerSide userSide) {
     setvbuf(stdin, NULL, _IOLBF, -1);
     move* currentMove = tree;
     wprintf(L"\n");
-    print_board(theBoard.board);
-    wprintf(L"\n");
+    if (!blindMode) {
+        print_board(theBoard.board);
+    }
     if (userSide == black) {
         currentMove = currentMove->firstChoice;
     }
@@ -1108,8 +1110,9 @@ void play(move* tree, playerSide userSide) {
             board_apply_move(theBoard.board, currentMove);
             print_algebraic_notation(currentMove);
             wprintf(L"\n");
-            print_board(theBoard.board);
-            wprintf(L"\n");
+            if (!blindMode) {
+                print_board(theBoard.board);
+            }
         }
         if (currentMove->firstChoice == NULL) {
             break;
@@ -1126,8 +1129,9 @@ void play(move* tree, playerSide userSide) {
             } else {
                 currentMove = goToMove;
                 board_apply_move(theBoard.board, currentMove);
-                print_board(theBoard.board);
-                wprintf(L"\n");
+                if (!blindMode) {
+                    print_board(theBoard.board);
+                }
                 break;
             }
         }
@@ -1139,12 +1143,14 @@ void play(move* tree, playerSide userSide) {
 typedef struct {
     char* inputPath;
     playerSide playerSide;
+    bool blindMode;
 } options;
 
 options init_options() {
     options options;
     options.inputPath = "";
     options.playerSide = white;
+    options.blindMode = false;
     return options;
 }
 
@@ -1155,8 +1161,14 @@ options parse_options(int argc, char* argv[]) {
             options.playerSide = black;
         } else if (strcmp(argv[i], "--white") == 0) {
             options.playerSide = white;
-        } else {
+        } else if (strcmp(argv[i], "--blind") == 0) {
+            options.blindMode = true;
+        } else if (strlen(options.inputPath) == 0) {
             options.inputPath = argv[i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Invalid option %s.\n", argv[i]);
+        } else {
+            fprintf(stderr, "Unexpected multiple arguments.\n");
         }
     }
     return options;
@@ -1179,5 +1191,5 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "%s", res.errorMessage);
     }
     // print_tree(res.moveTreeRoot->firstChoice);
-    play(res.moveTreeRoot, options.playerSide);
+    play(res.moveTreeRoot, options.playerSide, options.blindMode);
 }
