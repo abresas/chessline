@@ -882,6 +882,11 @@ bool no_pieces_jumped(sidedPiece board[8][8], int fromRank, int fromFile, int to
     return true;
 }
 
+/*
+ * Disambiguates moves such as Re1 that doesn't specify which rook moves to e1.
+ * Assumes that the notation already uniquely specifies piece.
+ * TODO: fail and warn when move not unique.
+ */
 bool board_apply_move(sidedPiece board[8][8], move* m) {
     if (m->isShortCastling) {
         if (m->side == white) {
