@@ -4,14 +4,23 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <locale.h>
+#include <wchar.h>
 
 #define BUFFER_SIZE 256
 // backtrack needed because what may look like a departure position may be destination position
 #define BACKTRACK_SIZE 8
 #define ERROR_MESSAGE_SIZE 256
+#define DARK_TILE_COLOR 130
+#define LIGHT_TILE_COLOR 223
+#define WHITE_PIECE_COLOR 250
+#define BLACK_PIECE_COLOR 0
+
+#define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
 
 typedef enum {white, black} playerSide;
-typedef enum {pawn, knight, bishop, rook, queen, king} pieceEnum;
+typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
+typedef enum {empty = 0, blackPawn = -1, blackKnight = -2, blackBishop = -3, blackRook = -4, blackQueen = -5, blackKing = -6, whitePawn = 1, whiteKnight = 2, whiteBishop = 3, whiteRook = 4, whiteQueen = 5, whiteKing = 6} sidedPiece;
 typedef enum {aFile = 1, bFile = 2, cFile = 3, dFile = 4, eFile = 5, fFile = 6, gFile = 7, hFile = 8} chessFile;
 
 typedef struct {
@@ -22,6 +31,8 @@ typedef struct {
 typedef struct moveTag {
     position departurePosition;
     pieceEnum piece;
+    playerSide side;
+    sidedPiece sidedPiece;
     pieceEnum promoteTo;
     position destination;
     int probability;
@@ -47,6 +58,7 @@ move* mkMove() {
     m->promoteTo = pawn;
     m->probability = 0;
     m->isCapture = m->isCheck = m->isCheckmate = m->isRoot = m->isShortCastling = m->isLongCastling = m->decisionLevel = 0;
+    m->side = black; // fake root node is black in order to switch to white for first move
     return m;
 }
 
@@ -470,6 +482,7 @@ parseResult parse_until(parser p, parserState untilState) {
                     continue;
                 }
                 newMove->decisionLevel = decisionLevel;
+                newMove->side = p.currentMove->side == white ? black : white;
                 appendMove(p.currentMove, newMove);
                 p.currentMove = newMove;
                 p.state = parseProbabilityState;
@@ -518,6 +531,7 @@ parseResult parse_until(parser p, parserState untilState) {
                     p.state = parseLongCastlingState;
                 } else {
                     p.currentMove->piece = king;
+                    p.currentMove->sidedPiece = p.currentMove->side == white ? whiteKing : blackKing;
                     p.currentMove->isShortCastling = true;
                     p.state = finishParseMoveState;
                 }
@@ -529,6 +543,7 @@ parseResult parse_until(parser p, parserState untilState) {
                     continue;
                 }
                 p.currentMove->piece = king;
+                p.currentMove->sidedPiece = p.currentMove->side == white ? whiteKing : blackKing;
                 p.currentMove->isLongCastling = true;
                 p.state = finishParseMoveState;
                 break;
@@ -563,8 +578,10 @@ parseResult parse_until(parser p, parserState untilState) {
                 res = read_piece(&p);
                 if (!res.hasError) {
                     p.currentMove->piece = res.piece;
+                    p.currentMove->sidedPiece = p.currentMove->side == white ? res.piece : -res.piece;
                 } else {
                     p.currentMove->piece = pawn;
+                    p.currentMove->sidedPiece = p.currentMove->side == white ? whitePawn : blackPawn;
                 }
                 p.state = parseMoveCaptureState;
                 break;
@@ -689,32 +706,32 @@ parseResult parse_variants(FILE* file) {
 void print_position(position pos) {
     switch (pos.file) {
         case aFile:
-            printf("a");
+            wprintf(L"a");
             break;
         case bFile:
-            printf("b");
+            wprintf(L"b");
             break;
         case cFile:
-            printf("c");
+            wprintf(L"c");
             break;
         case dFile:
-            printf("d");
+            wprintf(L"d");
             break;
         case eFile:
-            printf("e");
+            wprintf(L"e");
             break;
         case fFile:
-            printf("f");
+            wprintf(L"f");
             break;
         case gFile:
-            printf("g");
+            wprintf(L"g");
             break;
         case hFile:
-            printf("h");
+            wprintf(L"h");
             break;
     }
     if (pos.rank) {
-        printf("%d", pos.rank);
+        wprintf(L"%d", pos.rank);
     }
 }
 
@@ -723,19 +740,19 @@ void print_piece(pieceEnum p) {
         case pawn:
             break;
         case knight:
-            printf("N");
+            wprintf(L"N");
             break;
         case bishop:
-            printf("B");
+            wprintf(L"B");
             break;
         case rook:
-            printf("R");
+            wprintf(L"R");
             break;
         case queen:
-            printf("Q");
+            wprintf(L"Q");
             break;
         case king:
-            printf("K");
+            wprintf(L"K");
             break;
     }
 }
@@ -746,18 +763,18 @@ void print_algebraic_notation(move* m) {
     }
     print_piece(m->piece);
     if (m->isCapture) {
-        printf("x");
+        wprintf(L"x");
     }
     print_position(m->destination);
     if (m->promoteTo != pawn) {
-        printf("=");
+        wprintf(L"=");
         print_piece(m->promoteTo);
     }
     if (m->isCheck) {
-        printf("+");
+        wprintf(L"+");
     }
     if (m->isCheckmate) {
-        printf("#");
+        wprintf(L"#");
     }
 }
 
@@ -811,7 +828,7 @@ bool moves_equal(move* m1, move* m2) {
     return m1->departurePosition.rank == m2->departurePosition.rank && m1->departurePosition.file == m2->departurePosition.file && m1->piece == m2->piece && m1->destination.rank == m2->destination.rank && m1->destination.file == m2->destination.file;
 }
 
-move* apply_move(move* moveTree, move* newMove) {
+move* tree_apply_move(move* moveTree, move* newMove) {
     move* c = moveTree->firstChoice;
     while (c != NULL) {
         if (moves_equal(c, newMove)) {
@@ -822,6 +839,166 @@ move* apply_move(move* moveTree, move* newMove) {
     return NULL;
 }
 
+typedef struct potentialMoveTag {
+    int rankBy;
+    int fileBy;
+    struct potentialMoveTag *nextPotentialMove;
+} potentialMove;
+
+potentialMove* add_potential_move(potentialMove* list, int rankBy, int fileBy) {
+    potentialMove* p = (potentialMove*)malloc(sizeof(potentialMove));
+    if (p == NULL) {
+        fprintf(stderr, "not enough memory for potential move");
+        exit(1);
+    }
+
+    p->rankBy = rankBy;
+    p->fileBy = fileBy;
+    p->nextPotentialMove = list;
+
+    return p;
+}
+
+void free_potential_move(potentialMove* list) {
+    if (list == NULL) {
+        return;
+    }
+    free_potential_move(list->nextPotentialMove);
+    free(list);
+}
+
+bool board_apply_move(sidedPiece board[8][8], move* m) {
+    if (m->isShortCastling) {
+        if (m->side == white) {
+            board[0][4] = empty;
+            board[0][7] = empty;
+            board[0][5] = whiteRook;
+            board[0][6] = whiteKing;
+        } else {
+            board[7][4] = empty;
+            board[7][7] = empty;
+            board[7][5] = blackRook;
+            board[7][6] = blackKing;
+        }
+        return true;
+    } else if (m->isLongCastling) {
+        if (m->side == white) {
+            board[0][4] = empty;
+            board[0][0] = empty;
+            board[0][3] = whiteRook;
+            board[0][2] = whiteKing;
+        } else {
+            board[7][4] = empty;
+            board[7][0] = empty;
+            board[7][3] = blackRook;
+            board[7][2] = blackKing;
+        }
+        return true;
+    }
+    potentialMove* potentialMoveTip = NULL;
+    switch (m->piece) {
+        case pawn:
+            if (m->isCapture) {
+                potentialMoveTip = add_potential_move(potentialMoveTip, m->side == white ? 1 : -1, 1);
+                potentialMoveTip = add_potential_move(potentialMoveTip, m->side == white ? 1 : -1, -1);
+            } else {
+                potentialMoveTip = add_potential_move(potentialMoveTip, m->side == white ? 1 : -1, 0);
+                potentialMoveTip = add_potential_move(potentialMoveTip, m->side == white ? 2 : -2, 0);
+            }
+            break;
+        case knight:
+            potentialMoveTip = add_potential_move(potentialMoveTip, 2, 1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -2, 1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, 2, -1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -2, -1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, 1, 2);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -1, 2);
+            potentialMoveTip = add_potential_move(potentialMoveTip, 1, -2);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -1, -2);
+            break;
+        case bishop:
+            for (int i = 1; i < 8; ++i) {
+                // right diagonal
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, -i);
+                // left diagonal
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, -i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, i);
+            }
+            break;
+        case rook:
+            for (int i = 1; i < 8; ++i) {
+                // same rank
+                potentialMoveTip = add_potential_move(potentialMoveTip, 0, i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, 0, -i);
+                // same file
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, 0);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, 0);
+            }
+            break;
+        case queen:
+            for (int i = -7; i < 8; ++i) {
+                // same rank
+                potentialMoveTip = add_potential_move(potentialMoveTip, 0, i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, 0, -i);
+                // same file
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, 0);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, 0);
+                // right diagonal
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, -i);
+                // left diagonal
+                potentialMoveTip = add_potential_move(potentialMoveTip, i, -i);
+                potentialMoveTip = add_potential_move(potentialMoveTip, -i, i);
+            }
+            break;
+        case king:
+            // same rank
+            potentialMoveTip = add_potential_move(potentialMoveTip, 0, 1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, 0, -1);
+            // same file
+            potentialMoveTip = add_potential_move(potentialMoveTip, 1, 0);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -1, 0);
+            // right diagonal
+            potentialMoveTip = add_potential_move(potentialMoveTip, 1, 1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -1, -1);
+            // left diagonal
+            potentialMoveTip = add_potential_move(potentialMoveTip, 1, -1);
+            potentialMoveTip = add_potential_move(potentialMoveTip, -1, 1);
+            break;
+    }
+    int fromRank = 0, fromFile = 0;
+    bool found = false;
+    while (potentialMoveTip != NULL) {
+        fromRank = m->destination.rank-1 - potentialMoveTip->rankBy;
+        fromFile = m->destination.file-1 - potentialMoveTip->fileBy;
+        // fprintf(stderr, "checking %d %d (piece=%d)\n", fromFile, fromRank, m->piece);
+        if (fromRank >= 0 && fromFile >= 0 && fromRank < 8 && fromFile < 8 &&
+            (m->departurePosition.rank == 0 || m->departurePosition.rank == fromRank+1) &&
+            (m->departurePosition.file == 0 || m->departurePosition.file == fromFile+1)) {
+            sidedPiece sp = board[fromRank][fromFile];
+            playerSide s = sp > 0 ? white : black;
+            pieceEnum p = sp > 0 ? sp : -sp;
+            if (s == m->side && p == m->piece) {
+                // cannot go to position occupied by same colored piece
+                if (board[m->destination.rank-1][m->destination.file-1] * sp <= 0) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        potentialMoveTip = potentialMoveTip->nextPotentialMove;
+    }
+    if (!found) {
+        fprintf(stderr, "illegal move!\n");
+        exit(1);
+    }
+    // wprintf(L"from rank %d file %d to rank %d file %d\n", fromRank, fromFile, m->destination.rank-1, m->destination.file-1);
+    board[fromRank][fromFile] = empty;
+    board[m->destination.rank-1][m->destination.file-1] = m->sidedPiece;
+    return true;
+}
+
 void* random_array_choice(void** choices, int numChoices) {
     int choiceNum = (int)floor(random_probability() * numChoices);
     return choices[choiceNum];
@@ -830,39 +1007,99 @@ void* random_array_choice(void** choices, int numChoices) {
 void greet() {
     char* greetings[3] = {"Let's play chess!", "Good luck, have fun!", "Let's go!"};
     char* s = (char*)random_array_choice((void**)greetings, 3);
-    printf("%s\n", s);
+    wprintf(L"%s\n", s);
+}
+
+typedef struct {
+    sidedPiece board[8][8];
+} board;
+
+board make_board() {
+    sidedPiece board_array[8][8] = {
+        { whiteRook, whiteKnight, whiteBishop, whiteQueen, whiteKing, whiteBishop, whiteKnight, whiteRook },
+        { whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn },
+        EMPTY_ROW,
+        EMPTY_ROW,
+        EMPTY_ROW,
+        EMPTY_ROW,
+        { blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn },
+        { blackRook, blackKnight, blackBishop, blackQueen, blackKing, blackBishop, blackKnight, blackRook }
+    };
+    board b;
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < 8; ++j) {
+            b.board[i][j] = board_array[i][j];
+        }
+    }
+    return b;
+}
+
+void print_board(sidedPiece board[8][8]) {
+    for (int rank = 7; rank >= 0; rank--) {
+        for (int file = 0; file <= 7; file++) {
+            sidedPiece sp = board[rank][file];
+            pieceEnum p = sp > 0 ? sp : -sp;
+            wchar_t unicodePoint = 0x2660 - p;
+            if (p == 0) {
+                unicodePoint = 0x0020;
+            }
+            // printf("%lc", board[rank][file]);
+            // wchar_t star = 0x265f;
+            // wprintf(L" %lc ", unicodePoint);
+            int tileColor = (rank+file) % 2 == 0 ? DARK_TILE_COLOR : LIGHT_TILE_COLOR;
+            int pieceColor = sp > 0 ? WHITE_PIECE_COLOR : BLACK_PIECE_COLOR;
+
+            // ansi color coding magic
+            wprintf(L"\e[38;5;%dm\e[48;5;%dm %lc ", pieceColor, tileColor, unicodePoint);
+        }
+        // last rank hidden if not a lot of whitespace
+        wprintf(L"\e[0m\n");
+    }
 }
 
 void play(move* tree, playerSide userSide) {
+    board theBoard = make_board();
+    //print_board(theBoard.board);
+    wprintf(L"\n");
     greet();
     setvbuf(stdin, NULL, _IOLBF, -1);
     move* currentMove = tree;
+    wprintf(L"\n");
+    print_board(theBoard.board);
+    wprintf(L"\n");
     while (currentMove != NULL) {
         // printf("currentMove:\n");
         if (!currentMove->isRoot) {
+            board_apply_move(theBoard.board, currentMove);
             print_algebraic_notation(currentMove);
-            printf("\n");
+            wprintf(L"\n");
+            print_board(theBoard.board);
+            wprintf(L"\n");
         }
         // printf("\n");
         while (true) {
-            printf("> ");
+            wprintf(L"> ");
             parseResult res = parse_algebraic_notation(stdin);
             // printf("got move:\n");
             // print_algebraic_notation(res.moveTreeRoot);
-            move* goToMove = apply_move(currentMove, res.moveTreeRoot);
+            move* goToMove = tree_apply_move(currentMove, res.moveTreeRoot);
             if (goToMove == NULL) {
-                printf("wrong move! try again:\n");
+                wprintf(L"wrong move! try again:\n");
             } else {
                 currentMove = goToMove;
+                board_apply_move(theBoard.board, currentMove);
+                print_board(theBoard.board);
+                wprintf(L"\n");
                 break;
             }
         }
         currentMove = choose_move(currentMove);
     }
+    wprintf(L"Line played correctly. Good job!\n");
 }
 
-
 int main() {
+    setlocale(LC_ALL, "");
     srand(time(0));
     FILE* fp = fopen("variants.txt", "r");
     parseResult res = parse_variants(fp);

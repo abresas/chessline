@@ -1,8 +1,8 @@
 e4 e5 Nf3 Nc6 Bb5
 	33% Nf6 O-O
-		Nxe5 Re1
+		Nxe4 Re1
 			20% d6 d4
 			40% Nf6 Nd2
-			40% Nd6 Nxe6
-	33% d6 d4 dxe5 dxe5
+			40% Nd6 Nxe5
+	33% d6 d4 exd4 Nxd4
 	33% a6 Bxc6
