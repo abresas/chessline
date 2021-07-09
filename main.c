@@ -16,6 +16,9 @@
 #define WHITE_PIECE_COLOR 250
 #define BLACK_PIECE_COLOR 0
 
+#define UNICODE_BLACK_CHESS_PAWN 0x265f
+#define UNICODE_SPACE 0x0020
+
 #define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
 
 typedef enum {white, black} playerSide;
@@ -961,7 +964,7 @@ bool no_pieces_jumped(sidedPiece board[8][8], int fromRank, int fromFile, int to
  *
  * Disambiguates moves such as Re1 that doesn't specify which rook moves to e1.
  * Assumes that the notation already uniquely specifies piece.
- * TODO: fail and warn when move not unique.
+ * TODO: fail and warn when move not unique or illegal.
  */
 bool board_apply_move(sidedPiece board[8][8], move* m) {
     if (m->isShortCastling) {
@@ -1152,9 +1155,9 @@ void print_board(sidedPiece board[8][8]) {
         for (int file = 0; file <= 7; file++) {
             sidedPiece sp = board[rank][file];
             pieceEnum p = sp > 0 ? sp : -sp;
-            wchar_t unicodePoint = 0x2660 - p;
+            wchar_t unicodePoint = UNICODE_BLACK_CHESS_PAWN - p + 1;
             if (p == 0) {
-                unicodePoint = 0x0020;
+                unicodePoint = UNICODE_SPACE;
             }
             // printf("%lc", board[rank][file]);
             // wchar_t star = 0x265f;
