@@ -780,16 +780,16 @@ void print_algebraic_notation(move* m) {
 
 void print_tree(move* m) {
     if (m->previousMove && m->previousMove->decisionLevel != m->decisionLevel) {
-        printf("\n");
+        wprintf(L"\n");
         for (int i = 0; i < m->decisionLevel; ++i) {
-            printf("\t");
+            wprintf(L"\t");
         }
     }
     if (m->probability != 0) {
-        printf("%d%% ", m->probability);
+        wprintf(L"%d%% ", m->probability);
     }
     print_algebraic_notation(m);
-    printf(" ");
+    wprintf(L" ");
     move*c = m->firstChoice;
     while (c != NULL) {
         print_tree(c);
