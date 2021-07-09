@@ -1027,8 +1027,8 @@ void* random_array_choice(void** choices, int numChoices) {
 }
 
 void greet() {
-    char* greetings[3] = {"Let's play chess!", "Good luck, have fun!", "Let's go!"};
-    char* s = (char*)random_array_choice((void**)greetings, 3);
+    char* greetings[4] = {"Let's play chess!", "Good luck, have fun!", "Let's go!", "Let's see if you  know how to play this opening."};
+    char* s = (char*)random_array_choice((void**)greetings, sizeof(greetings)/sizeof(char*));
     wprintf(L"%s\n", s);
 }
 
