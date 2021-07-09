@@ -867,6 +867,21 @@ void free_potential_move(potentialMove* list) {
     free(list);
 }
 
+bool no_pieces_jumped(sidedPiece board[8][8], int fromRank, int fromFile, int toRank, int toFile) {
+    int rankStep = toRank > fromRank ? 1 : toRank < fromRank ? -1 : 0;
+    int fileStep = toFile > fromFile ? 1 : toFile < fromFile ? -1 : 0;
+    int currentRank = fromRank + rankStep;
+    int currentFile = fromFile + fileStep;
+    while (currentRank != toRank || currentFile != toFile) {
+        if (board[currentRank][currentFile] != empty) {
+            return false;
+        }
+        currentRank = currentRank + rankStep;
+        currentFile = currentFile + fileStep;
+    }
+    return true;
+}
+
 bool board_apply_move(sidedPiece board[8][8], move* m) {
     if (m->isShortCastling) {
         if (m->side == white) {
@@ -982,8 +997,10 @@ bool board_apply_move(sidedPiece board[8][8], move* m) {
             if (s == m->side && p == m->piece) {
                 // cannot go to position occupied by same colored piece
                 if (board[m->destination.rank-1][m->destination.file-1] * sp <= 0) {
-                    found = true;
-                    break;
+                    if (p == knight || no_pieces_jumped(board, fromRank, fromFile, m->destination.rank-1, m->destination.file-1)) {
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
