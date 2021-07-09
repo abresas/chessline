@@ -797,10 +797,12 @@ void print_tree(move* m) {
     }
 }
 
+/* Returning a random double floating point from 0 to 1. */
 double random_probability() {
     return (double)rand() / (double)RAND_MAX;
 }
 
+/** Decide which move to use from the movement tree. Selects moves according to their probability weight. */
 move* choose_move(move* currentMove) {
     double totalProbabilityWeight = 0;
     move* choice = currentMove->firstChoice;
@@ -823,11 +825,12 @@ move* choose_move(move* currentMove) {
     return choice;
 }
 
-// compares only curent move, not child/parent choices
+/** compare two moves, disregarding child/sibling/parent choices in the tree, and probabilities */
 bool moves_equal(move* m1, move* m2) {
     return m1->departurePosition.rank == m2->departurePosition.rank && m1->departurePosition.file == m2->departurePosition.file && m1->piece == m2->piece && m1->destination.rank == m2->destination.rank && m1->destination.file == m2->destination.file;
 }
 
+/** Add move to move tree. */
 move* tree_apply_move(move* moveTree, move* newMove) {
     move* c = moveTree->firstChoice;
     while (c != NULL) {
@@ -845,6 +848,7 @@ typedef struct potentialMoveTag {
     struct potentialMoveTag *nextPotentialMove;
 } potentialMove;
 
+/** Add a potential move to the list. */
 potentialMove* add_potential_move(potentialMove* list, int rankBy, int fileBy) {
     potentialMove* p = (potentialMove*)malloc(sizeof(potentialMove));
     if (p == NULL) {
@@ -859,6 +863,7 @@ potentialMove* add_potential_move(potentialMove* list, int rankBy, int fileBy) {
     return p;
 }
 
+/** Free memory allocated for potential move list. */
 void free_potential_move(potentialMove* list) {
     if (list == NULL) {
         return;
@@ -867,6 +872,7 @@ void free_potential_move(potentialMove* list) {
     free(list);
 }
 
+/** Check if a move from departure (rank, file) to destination (rank, file) would require jumping any pieces, irrespective of moving piece. */
 bool no_pieces_jumped(sidedPiece board[8][8], int fromRank, int fromFile, int toRank, int toFile) {
     int rankStep = toRank > fromRank ? 1 : toRank < fromRank ? -1 : 0;
     int fileStep = toFile > fromFile ? 1 : toFile < fromFile ? -1 : 0;
@@ -883,6 +889,8 @@ bool no_pieces_jumped(sidedPiece board[8][8], int fromRank, int fromFile, int to
 }
 
 /*
+ * Apply the move m to the board, returning true if the move was unique and legal.
+ *
  * Disambiguates moves such as Re1 that doesn't specify which rook moves to e1.
  * Assumes that the notation already uniquely specifies piece.
  * TODO: fail and warn when move not unique.
@@ -1021,6 +1029,7 @@ bool board_apply_move(sidedPiece board[8][8], move* m) {
     return true;
 }
 
+/** Choose random element from an array of pointers. */
 void* random_array_choice(void** choices, int numChoices) {
     int choiceNum = (int)floor(random_probability() * numChoices);
     return choices[choiceNum];
@@ -1036,6 +1045,7 @@ typedef struct {
     sidedPiece board[8][8];
 } board;
 
+/** Create a new board having the initial chess position. */
 board make_board() {
     sidedPiece board_array[8][8] = {
         { whiteRook, whiteKnight, whiteBishop, whiteQueen, whiteKing, whiteBishop, whiteKnight, whiteRook },
