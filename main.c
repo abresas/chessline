@@ -35,39 +35,51 @@ typedef struct moveTag {
     sidedPiece sidedPiece;
     pieceEnum promoteTo;
     position destination;
-    int probability;
-    struct moveTag* firstChoice;
-    struct moveTag* nextChoice;
-    struct moveTag* previousMove;
     bool isCapture;
     bool isCheck;
     bool isCheckmate;
-    bool isRoot;
     bool isShortCastling;
     bool isLongCastling;
-    int decisionLevel;
 } move;
 
-move* mkMove() {
+typedef struct moveTreeTag {
+    move* move;
+    int decisionLevel;
+    int probability;
+    bool isRoot;
+    struct moveTreeTag* firstChoice;
+    struct moveTreeTag* nextChoice;
+    struct moveTreeTag* previousMove;
+} moveTree;
+
+move* new_move() {
     move* m = (move*)malloc(sizeof(move));
-    m->firstChoice = NULL;
-    m->nextChoice = NULL;
-    m->previousMove = NULL;
     m->departurePosition.file = 0;
     m->departurePosition.rank = 0;
+    m->destination.file = 0;
+    m->destination.rank = 0;
     m->promoteTo = pawn;
-    m->probability = 0;
-    m->isCapture = m->isCheck = m->isCheckmate = m->isRoot = m->isShortCastling = m->isLongCastling = m->decisionLevel = 0;
+    m->isCapture = m->isCheck = m->isCheckmate = m->isShortCastling = m->isLongCastling = 0;
     m->side = black; // fake root node is black in order to switch to white for first move
     return m;
 }
 
-void appendMove(move* previous, move* next) {
+moveTree* new_move_tree() {
+    moveTree* t = (moveTree*)malloc(sizeof(moveTree));
+    t->firstChoice = NULL;
+    t->nextChoice = NULL;
+    t->previousMove = NULL;
+    t->isRoot = t->decisionLevel = t->probability = 0;
+    t->move = new_move();
+    return t;
+}
+
+void append_move(moveTree* previous, moveTree* next) {
     next->previousMove = previous;
     if (!previous->firstChoice) {
         previous->firstChoice = next;
     } else {
-        move* lastChoice = previous->firstChoice;
+        moveTree* lastChoice = previous->firstChoice;
         while (lastChoice->nextChoice != NULL) {
             lastChoice = lastChoice->nextChoice;
         }
@@ -93,7 +105,8 @@ typedef struct {
     bool hasError;
     union {
         char errorMessage[ERROR_MESSAGE_SIZE];
-        move* moveTreeRoot;
+        moveTree* moveTreeRoot;
+        move* move;
     };
 } parseResult;
 
@@ -155,7 +168,8 @@ typedef struct {
     int decisionLevel;
     parserState state;
     move* currentMove;
-    move* moveTree;
+    moveTree* moveTreeTip;
+    moveTree* moveTreeRoot;
     int totalCharacterCount;
     parserAttemptStack attemptStack;
 } parser;
@@ -168,10 +182,17 @@ parseResult make_parse_error(parser* p, char* msg) {
     return res;
 }
 
-parseResult make_parse_result(move* moveTreeRoot) {
+parseResult make_parse_tree_result(moveTree* moveTreeRoot) {
     parseResult res;
     res.hasError = false;
     res.moveTreeRoot = moveTreeRoot;
+    return res;
+}
+
+parseResult make_parse_move_result(move* m) {
+    parseResult res;
+    res.hasError = false;
+    res.move = m;
     return res;
 }
 
@@ -440,8 +461,8 @@ parser make_parser(FILE* file) {
     p.state = startState;
     p.line = 1;
     p.column = 1;
-    p.moveTree = p.currentMove = mkMove();
-    p.currentMove->isRoot = true;
+    p.moveTreeRoot = p.moveTreeTip = new_move_tree();
+    p.moveTreeTip->isRoot = true;
     p.decisionLevel = 0;
     p.totalCharacterCount = 0;
     p.attemptStack.top = -1;
@@ -453,7 +474,8 @@ parseResult parse_until(parser* p, parserState untilState) {
     int digit;
     int decisionLevel = 0;
     readResult res;
-    move* newMove;
+    moveTree* newMove;
+    move* currentMove = p->moveTreeTip->move;
     parserAttempt newAttempt;
 
     if (read_buffer_initial(p) <= 0) {
@@ -488,21 +510,22 @@ parseResult parse_until(parser* p, parserState untilState) {
                 p->state = beginParseMoveState;
                 break;
             case beginParseMoveState:
-                newMove = mkMove();
+                newMove = new_move_tree();
                 if (!newMove) {
                     sprintf(errorMessage, "failed to allocate memory for new move");
                     continue;
                 }
                 newMove->decisionLevel = decisionLevel;
-                newMove->side = p->currentMove->side == white ? black : white;
-                appendMove(p->currentMove, newMove);
-                p->currentMove = newMove;
+                newMove->move->side = currentMove->side == white ? black : white;
+                append_move(p->moveTreeTip, newMove);
+                p->moveTreeTip = newMove;
                 p->state = parseProbabilityState;
+                currentMove = p->moveTreeTip->move;
                 break;
             case parseProbabilityState:
                 res = read_integer(p);
                 if (!res.hasError) {
-                    p->currentMove->probability = res.integer;
+                    p->moveTreeTip->probability = res.integer;
                     res = read_character(p, '%');
                     if (res.hasError) {
                         sprintf(errorMessage, "%s", res.errorMessage);
@@ -514,7 +537,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                         continue;
                     }
                 } else {
-                    p->currentMove->probability = 100;
+                    p->moveTreeTip->probability = 100;
                 }
                 p->state = parseAlgebraicNotation;
                 break;
@@ -542,9 +565,9 @@ parseResult parse_until(parser* p, parserState untilState) {
                 if (!res.hasError) {
                     p->state = parseLongCastlingState;
                 } else {
-                    p->currentMove->piece = king;
-                    p->currentMove->sidedPiece = p->currentMove->side == white ? whiteKing : blackKing;
-                    p->currentMove->isShortCastling = true;
+                    currentMove->piece = king;
+                    currentMove->sidedPiece = currentMove->side == white ? whiteKing : blackKing;
+                    currentMove->isShortCastling = true;
                     p->state = finishParseMoveState;
                 }
                 break;
@@ -554,9 +577,9 @@ parseResult parse_until(parser* p, parserState untilState) {
                     sprintf(errorMessage, "%s", res.errorMessage);
                     continue;
                 }
-                p->currentMove->piece = king;
-                p->currentMove->sidedPiece = p->currentMove->side == white ? whiteKing : blackKing;
-                p->currentMove->isLongCastling = true;
+                currentMove->piece = king;
+                currentMove->sidedPiece = currentMove->side == white ? whiteKing : blackKing;
+                currentMove->isLongCastling = true;
                 p->state = finishParseMoveState;
                 break;
             case parseDepartureOrDestinationState:
@@ -569,38 +592,38 @@ parseResult parse_until(parser* p, parserState untilState) {
                 p->state = parseDepartureFileState;
                 break;
             case noDepartureState:
-                p->currentMove->departurePosition.file = p->currentMove->departurePosition.rank = 0;
+                currentMove->departurePosition.file = currentMove->departurePosition.rank = 0;
                 p->state = parseMoveDestinationState;
                 break;
             case parseDepartureFileState:
                 res = read_chess_file(p);
                 if (!res.hasError) {
-                    p->currentMove->departurePosition.file = res.file;
+                    currentMove->departurePosition.file = res.file;
                 }
                 p->state = parseDepartureRankState;
                 break;
             case parseDepartureRankState:
                 res = read_rank(p);
                 if (!res.hasError) {
-                    p->currentMove->departurePosition.rank = res.rank;
+                    currentMove->departurePosition.rank = res.rank;
                 }
                 p->state = parseMovePieceState;
                 break;
             case parseMovePieceState:
                 res = read_piece(p);
                 if (!res.hasError) {
-                    p->currentMove->piece = res.piece;
-                    p->currentMove->sidedPiece = p->currentMove->side == white ? res.piece : -res.piece;
+                    currentMove->piece = res.piece;
+                    currentMove->sidedPiece = currentMove->side == white ? res.piece : -res.piece;
                 } else {
-                    p->currentMove->piece = pawn;
-                    p->currentMove->sidedPiece = p->currentMove->side == white ? whitePawn : blackPawn;
+                    currentMove->piece = pawn;
+                    currentMove->sidedPiece = currentMove->side == white ? whitePawn : blackPawn;
                 }
                 p->state = parseMoveCaptureState;
                 break;
             case parseMoveCaptureState:
                 res = read_capture(p);
                 if (!res.hasError) {
-                    p->currentMove->isCapture = 1;
+                    currentMove->isCapture = 1;
                 }
                 p->state = parseMoveDestinationState;
                 break;
@@ -608,7 +631,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 // fprintf(stderr, "buffer cursor (A): %d\n", p->bufferCursor);
                 res = read_chess_file(p);
                 if (!res.hasError) {
-                    p->currentMove->destination.file = res.file;
+                    currentMove->destination.file = res.file;
                     // fprintf(stderr, "got file %d\n", res.file);
                 } else {
                     sprintf(errorMessage, "%s", res.errorMessage);
@@ -617,7 +640,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 // fprintf(stderr, "buffer cursor (B): %d\n", p->bufferCursor);
                 res = read_rank(p);
                 if (!res.hasError) {
-                    p->currentMove->destination.rank = res.rank;
+                    currentMove->destination.rank = res.rank;
                 } else {
                     // fprintf(stderr, "parsemovedestination error\n");
                     sprintf(errorMessage, "%s", res.errorMessage);
@@ -632,7 +655,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 if (!res.hasError) {
                     res = read_piece(p);
                     if (!res.hasError) {
-                        p->currentMove->promoteTo = res.piece;
+                        currentMove->promoteTo = res.piece;
                     } else {
                         sprintf(errorMessage, "Expected type of piece to promote to, got '%c'", res.actualCharacter);
                         continue;
@@ -643,7 +666,7 @@ parseResult parse_until(parser* p, parserState untilState) {
             case parseMoveCheckState:
                 res = read_check(p);
                 if (!res.hasError) {
-                    p->currentMove->isCheck = true;
+                    currentMove->isCheck = true;
                     p->state = finishParseMoveState;
                 } else {
                     p->state = parseMoveCheckmateState;
@@ -652,7 +675,7 @@ parseResult parse_until(parser* p, parserState untilState) {
             case parseMoveCheckmateState:
                 res = read_checkmate(p);
                 if (!res.hasError) {
-                    p->currentMove->isCheckmate = true;
+                    currentMove->isCheckmate = true;
                 }
                 p->state = finishParseMoveState;
                 break;
@@ -688,10 +711,15 @@ parseResult parse_until(parser* p, parserState untilState) {
                     continue;
                 }
 
-                while (p->currentMove->decisionLevel != decisionLevel - 1 && p->currentMove != NULL) {
-                    p->currentMove = p->currentMove->previousMove;
+                while (p->moveTreeTip != NULL && p->moveTreeTip->decisionLevel != decisionLevel - 1) {
+                    p->moveTreeTip = p->moveTreeTip->previousMove;
+                    if (p->moveTreeTip != NULL) {
+                        currentMove = p->moveTreeTip->move;
+                    } else {
+                        currentMove = NULL;
+                    }
                 }
-                if (p->currentMove == NULL) {
+                if (p->moveTreeTip == NULL) {
                     fprintf(stderr, "indentation error. Make sure you use tabs instead of spaces.\n");
                     exit(1);
                 }
@@ -707,7 +735,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 break;
         }
     }
-    return make_parse_result(p->moveTree);
+    return make_parse_tree_result(p->moveTreeRoot);
 }
 
 parseResult parse_algebraic_notation(char* buffer) {
@@ -717,12 +745,16 @@ parseResult parse_algebraic_notation(char* buffer) {
     parser p = make_parser(memfile);
     p.state = parseAlgebraicNotation;
     parseResult res = parse_until(&p, finishParseMoveState);
+    fclose(memfile);
 
     if (!res.hasError && p.totalCharacterCount != strlen(buffer)) {
         return make_parse_error(&p, "Invalid characters after move notation.\n");
     }
 
-    fclose(memfile);
+    if (!res.hasError) {
+        return make_parse_move_result(res.moveTreeRoot->move);
+    }
+
     return res;
 }
 
@@ -786,6 +818,14 @@ void print_piece(pieceEnum p) {
 }
 
 void print_algebraic_notation(move* m) {
+    if (m->isShortCastling) {
+        wprintf(L"O-O");
+        return;
+    }
+    if (m->isLongCastling) {
+        wprintf(L"O-O-O");
+        return;
+    }
     if (m->departurePosition.file || m->departurePosition.rank) {
         print_position(m->departurePosition);
     }
@@ -806,7 +846,7 @@ void print_algebraic_notation(move* m) {
     }
 }
 
-void print_tree(move* m) {
+void print_tree(moveTree* m) {
     if (m->previousMove && m->previousMove->decisionLevel != m->decisionLevel) {
         wprintf(L"\n");
         for (int i = 0; i < m->decisionLevel; ++i) {
@@ -816,9 +856,9 @@ void print_tree(move* m) {
     if (m->probability != 0) {
         wprintf(L"%d%% ", m->probability);
     }
-    print_algebraic_notation(m);
+    print_algebraic_notation(m->move);
     wprintf(L" ");
-    move*c = m->firstChoice;
+    moveTree*c = m->firstChoice;
     while (c != NULL) {
         print_tree(c);
         c = c->nextChoice;
@@ -831,9 +871,9 @@ double random_probability() {
 }
 
 /** Decide which move to use from the movement tree. Selects moves according to their probability weight. */
-move* choose_move(move* currentMove) {
+moveTree* choose_move(moveTree* currentMove) {
     double totalProbabilityWeight = 0;
-    move* choice = currentMove->firstChoice;
+    moveTree* choice = currentMove->firstChoice;
     while (choice != NULL) {
         totalProbabilityWeight += choice->probability;
         choice = choice->nextChoice;
@@ -859,10 +899,10 @@ bool moves_equal(move* m1, move* m2) {
 }
 
 /** Add move to move tree. */
-move* tree_apply_move(move* moveTree, move* newMove) {
-    move* c = moveTree->firstChoice;
+moveTree* tree_apply_move(moveTree* t, move* newMove) {
+    moveTree* c = t->firstChoice;
     while (c != NULL) {
-        if (moves_equal(c, newMove)) {
+        if (moves_equal(c->move, newMove)) {
             return c;
         }
         c = c->nextChoice;
@@ -1077,7 +1117,7 @@ void print_goodbye() {
 }
 
 void print_do_not_understand() {
-    char* messages[4] = {"Sorry, I did not understand.", "That doesn't look like a move.", "Sorry, please rephrase.", "Are you sure that's a move?"};
+    char* messages[4] = {"Sorry, I did not understand.", "That doesn't look like a move nor a command.", "Sorry, please rephrase.", "Are you sure that's a move (or command)?"};
     char* s = (char*)random_array_choice((void**)messages, sizeof(messages)/sizeof(char*));
     wprintf(L"%s\n", s);
 }
@@ -1131,32 +1171,31 @@ void print_board(sidedPiece board[8][8]) {
     wprintf(L"\n");
 }
 
-void play(move* tree, playerSide userSide, bool blindMode) {
+void play(moveTree* tree, playerSide userSide, bool blindMode) {
     board theBoard = make_board();
     char* buffer = (char*)malloc(BUFFER_SIZE*sizeof(char));
     //print_board(theBoard.board);
-    wprintf(L"\n");
     print_greeting();
     setvbuf(stdin, NULL, _IOLBF, -1);
-    move* currentMove = tree;
-    wprintf(L"\n");
+    moveTree* moveTreeTip = tree;
     if (!blindMode) {
+        wprintf(L"\n");
         print_board(theBoard.board);
     }
     if (userSide == black) {
-        currentMove = currentMove->firstChoice;
+        moveTreeTip = moveTreeTip->firstChoice;
     }
-    while (currentMove != NULL) {
+    while (moveTreeTip != NULL) {
         // printf("currentMove:\n");
-        if (!currentMove->isRoot) {
-            board_apply_move(theBoard.board, currentMove);
-            print_algebraic_notation(currentMove);
+        if (!moveTreeTip->isRoot) {
+            board_apply_move(theBoard.board, moveTreeTip->move);
+            print_algebraic_notation(moveTreeTip->move);
             wprintf(L"\n");
             if (!blindMode) {
                 print_board(theBoard.board);
             }
         }
-        if (currentMove->firstChoice == NULL) {
+        if (moveTreeTip->firstChoice == NULL) {
             break;
         }
         // printf("\n");
@@ -1182,19 +1221,19 @@ void play(move* tree, playerSide userSide, bool blindMode) {
 
             // printf("got move:\n");
             // print_algebraic_notation(res.moveTreeRoot);
-            move* goToMove = tree_apply_move(currentMove, res.moveTreeRoot);
+            moveTree* goToMove = tree_apply_move(moveTreeTip, res.move);
             if (goToMove == NULL) {
                 wprintf(L"wrong move! try again:\n");
             } else {
-                currentMove = goToMove;
-                board_apply_move(theBoard.board, currentMove);
+                moveTreeTip = goToMove;
+                board_apply_move(theBoard.board, moveTreeTip->move);
                 if (!blindMode) {
                     print_board(theBoard.board);
                 }
                 break;
             }
         }
-        currentMove = choose_move(currentMove);
+        moveTreeTip = choose_move(moveTreeTip);
     }
     wprintf(L"Line played correctly. Good job!\n");
     free(buffer);
