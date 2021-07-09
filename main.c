@@ -1130,10 +1130,16 @@ void play(move* tree, playerSide userSide) {
     wprintf(L"Line played correctly. Good job!\n");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     setlocale(LC_ALL, "");
     srand(time(0));
-    FILE* fp = fopen("variants.txt", "r");
+
+    if (argc < 2) {
+        fprintf(stderr, "No variants input file specified.\nUsage: $ %s INPUT_FILE\n", argv[0]);
+        exit(1);
+    }
+
+    FILE* fp = fopen(argv[1], "r");
     parseResult res = parse_variants(fp);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
