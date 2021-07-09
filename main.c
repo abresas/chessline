@@ -1099,6 +1099,9 @@ void play(move* tree, playerSide userSide) {
     wprintf(L"\n");
     print_board(theBoard.board);
     wprintf(L"\n");
+    if (userSide == black) {
+        currentMove = currentMove->firstChoice;
+    }
     while (currentMove != NULL) {
         // printf("currentMove:\n");
         if (!currentMove->isRoot) {
@@ -1107,6 +1110,9 @@ void play(move* tree, playerSide userSide) {
             wprintf(L"\n");
             print_board(theBoard.board);
             wprintf(L"\n");
+        }
+        if (currentMove->firstChoice == NULL) {
+            break;
         }
         // printf("\n");
         while (true) {
@@ -1130,6 +1136,32 @@ void play(move* tree, playerSide userSide) {
     wprintf(L"Line played correctly. Good job!\n");
 }
 
+typedef struct {
+    char* inputPath;
+    playerSide playerSide;
+} options;
+
+options init_options() {
+    options options;
+    options.inputPath = "";
+    options.playerSide = white;
+    return options;
+}
+
+options parse_options(int argc, char* argv[]) {
+    options options = init_options();
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--black") == 0) {
+            options.playerSide = black;
+        } else if (strcmp(argv[i], "--white") == 0) {
+            options.playerSide = white;
+        } else {
+            options.inputPath = argv[i];
+        }
+    }
+    return options;
+}
+
 int main(int argc, char *argv[]) {
     setlocale(LC_ALL, "");
     srand(time(0));
@@ -1139,11 +1171,13 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    FILE* fp = fopen(argv[1], "r");
+    options options = parse_options(argc, argv);
+
+    FILE* fp = fopen(options.inputPath, "r");
     parseResult res = parse_variants(fp);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
     }
     // print_tree(res.moveTreeRoot->firstChoice);
-    play(res.moveTreeRoot, white);
+    play(res.moveTreeRoot, options.playerSide);
 }
