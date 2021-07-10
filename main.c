@@ -19,12 +19,47 @@
 #define UNICODE_BLACK_CHESS_PAWN 0x265f
 #define UNICODE_SPACE 0x0020
 
+#define WHITE_CAN_CASTLE_KINGSIDE 1
+#define WHITE_CAN_CASTLE_QUEENSIDE 2
+#define BLACK_CAN_CASTLE_KINGSIDE 4
+#define BLACK_CAN_CASTLE_QUEENSIDE 8
+
+#define MAX_TAG_NAME_SIZE 256
+#define MAX_TAG_VALUE_SIZE 256
+
+#define ERROR_EOF 1
+#define ERROR_UNEXPECTED_CHARACTER 2
+
 #define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
 
 typedef enum {white, black} playerSide;
 typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
 typedef enum {empty = 0, blackPawn = -1, blackKnight = -2, blackBishop = -3, blackRook = -4, blackQueen = -5, blackKing = -6, whitePawn = 1, whiteKnight = 2, whiteBishop = 3, whiteRook = 4, whiteQueen = 5, whiteKing = 6} sidedPiece;
 typedef enum {aFile = 1, bFile = 2, cFile = 3, dFile = 4, eFile = 5, fFile = 6, gFile = 7, hFile = 8} chessFile;
+
+void print_board(sidedPiece board[8][8]) {
+    for (int rank = 7; rank >= 0; rank--) {
+        for (int file = 0; file <= 7; file++) {
+            sidedPiece sp = board[rank][file];
+            pieceEnum p = sp > 0 ? sp : -sp;
+            wchar_t unicodePoint = UNICODE_BLACK_CHESS_PAWN - p + 1;
+            if (p == 0) {
+                unicodePoint = UNICODE_SPACE;
+            }
+            // printf("%lc", board[rank][file]);
+            // wchar_t star = 0x265f;
+            // wprintf(L" %lc ", unicodePoint);
+            int tileColor = (rank+file) % 2 == 0 ? DARK_TILE_COLOR : LIGHT_TILE_COLOR;
+            int pieceColor = sp > 0 ? WHITE_PIECE_COLOR : BLACK_PIECE_COLOR;
+
+            // ansi color coding magic
+            wprintf(L"\e[38;5;%dm\e[48;5;%dm %lc ", pieceColor, tileColor, unicodePoint);
+        }
+        // last rank hidden if not a lot of whitespace
+        wprintf(L"\e[0m\n");
+    }
+    wprintf(L"\n");
+}
 
 typedef struct {
     chessFile file;
@@ -93,6 +128,7 @@ void append_move(moveTree* previous, moveTree* next) {
 typedef struct {
     bool hasError;
     char errorMessage[ERROR_MESSAGE_SIZE];
+    int errorCode;
     char actualCharacter;
     union {
         int integer;
@@ -101,20 +137,13 @@ typedef struct {
         int rank;
         pieceEnum piece;
         char character;
+        char tagName[MAX_TAG_NAME_SIZE];
+        char string[MAX_TAG_VALUE_SIZE];
     };
 } readResult;
 
-typedef struct {
-    bool hasError;
-    union {
-        char errorMessage[ERROR_MESSAGE_SIZE];
-        moveTree* moveTreeRoot;
-        move* move;
-    };
-} parseResult;
-
 typedef enum {
-    startState, beginParseMoveState, parseProbabilityState, parseMovePieceState, parseDepartureFileState, parseDepartureRankState,
+    startState, parseTagState, beginParseMoveState, parseProbabilityState, parseMovePieceState, parseDepartureFileState, parseDepartureRankState,
     parseMoveCaptureState, parseMoveDestinationState, parseMovePromotionState, parseMoveCheckState, parseMoveCheckmateState,
     parseAlgebraicNotation, parseShortCastlingState, parseLongCastlingState,
     finishParseMoveState, parseWhitespaceState, parseIndentationLevelState,
@@ -122,7 +151,7 @@ typedef enum {
 } parserState;
 
 static const char* stateStrings[] = {
-    "start", "start_parse_move", "parse_probability", "parse_move_piece", "parse_departure_file", "parse_departure_rank",
+    "start", "parse_tag", "start_parse_move", "parse_probability", "parse_move_piece", "parse_departure_file", "parse_departure_rank",
     "parse_capture", "parse_destination", "parse_promotion", "parse_check", "parse_checkmate",
     "start_algebraic_notation_move", "parse_short_castling", "parse_long_castling",
     "end_parse_move", "parse_whitespace", "parse_indentation_level",
@@ -160,6 +189,52 @@ void push_attempt(parserAttemptStack* attemptStack, parserAttempt attempt) {
     attemptStack->array[++attemptStack->top] = attempt;
 }
 
+/** Create a new board having the initial chess position. */
+void init_board(sidedPiece board[8][8]) {
+    sidedPiece board_array[8][8] = {
+        { whiteRook, whiteKnight, whiteBishop, whiteQueen, whiteKing, whiteBishop, whiteKnight, whiteRook },
+        { whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn },
+        EMPTY_ROW,
+        EMPTY_ROW,
+        EMPTY_ROW,
+        EMPTY_ROW,
+        { blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn },
+        { blackRook, blackKnight, blackBishop, blackQueen, blackKing, blackBishop, blackKnight, blackRook }
+    };
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < 8; ++j) {
+            board[i][j] = board_array[i][j];
+        }
+    }
+}
+
+typedef struct {
+    sidedPiece board[8][8];
+    playerSide sidePlaying;
+    position* enPassantTarget;
+    int castlingAvailability;
+    int halfMoveClock;
+    int fullMoveNo;
+} gameState;
+
+gameState* new_game() {
+    gameState* game = (gameState*)malloc(sizeof(gameState));
+    if (game == NULL) {
+        fprintf(stderr, "Failed to allocate memory for game state.\n");
+        exit(1);
+    }
+
+    init_board(game->board);
+
+    game->sidePlaying = white;
+    game->enPassantTarget = NULL;
+    game->castlingAvailability = 0;
+    game->halfMoveClock = 0;
+    game->fullMoveNo = 1;
+
+    return game;
+}
+
 typedef struct {
     FILE* file;
     int line;
@@ -175,7 +250,32 @@ typedef struct {
     moveTree* moveTreeRoot;
     int totalCharacterCount;
     parserAttemptStack attemptStack;
+    gameState* initGameState;
 } parser;
+
+parser make_parser(FILE* file) {
+    parser p;
+    p.file = file;
+    p.state = startState;
+    p.line = 1;
+    p.column = 1;
+    p.moveTreeRoot = p.moveTreeTip = new_move_tree();
+    p.moveTreeTip->isRoot = true;
+    p.decisionLevel = 0;
+    p.totalCharacterCount = 0;
+    p.attemptStack.top = -1;
+    p.initGameState = new_game();
+    return p;
+}
+
+typedef struct {
+    bool hasError;
+    union {
+        char errorMessage[ERROR_MESSAGE_SIZE];
+        parser* parser;
+        move* move;
+    };
+} parseResult;
 
 parseResult make_parse_error(parser* p, char* msg) {
     parseResult res;
@@ -185,10 +285,10 @@ parseResult make_parse_error(parser* p, char* msg) {
     return res;
 }
 
-parseResult make_parse_tree_result(moveTree* moveTreeRoot) {
+parseResult make_parse_parser_result(parser* p) {
     parseResult res;
     res.hasError = false;
-    res.moveTreeRoot = moveTreeRoot;
+    res.parser = p;
     return res;
 }
 
@@ -253,10 +353,32 @@ int read_buffer_if_needed(parser* p) {
     return -1;
 }
 
+readResult read_any_character(parser* p) {
+    readResult res;
+    if (read_buffer_if_needed(p) == 0) {
+        res.hasError = true;
+        res.errorCode = ERROR_EOF;
+        sprintf(res.errorMessage, "Unexpected end of file");
+        return res;
+    }
+    char c = p->buffer[p->bufferCursor];
+    p->bufferCursor++;
+    p->totalCharacterCount++;
+    p->column++;
+    if (c == '\n') {
+        p->column = 1;
+        p->line++;
+    }
+    res.hasError = false;
+    res.character = c;
+    return res;
+}
+
 readResult read_character(parser* p, char c) {
     readResult res;
     if (read_buffer_if_needed(p) == 0) {
         res.hasError = true;
+        res.errorCode = ERROR_EOF;
         sprintf(res.errorMessage, "Unexpected end of file");
         return res;
     }
@@ -271,6 +393,7 @@ readResult read_character(parser* p, char c) {
         res.hasError = false;
         res.character = c;
     } else {
+        res.errorCode = ERROR_UNEXPECTED_CHARACTER;
         res.hasError = true;
         sprintf(res.errorMessage, "Expected %c, got '%c'", c, p->buffer[p->bufferCursor]);
     }
@@ -281,6 +404,7 @@ readResult read_one_of_characters(parser* p, char* cs) {
     readResult res;
     if (read_buffer_if_needed(p) == 0) {
         res.hasError = true;
+        res.errorCode = ERROR_EOF;
         sprintf(res.errorMessage, "Unexpected end of file");
         return res;
     }
@@ -306,6 +430,7 @@ readResult read_one_of_characters(parser* p, char* cs) {
     // fprintf(stderr, "unwanted character\n");
     res.hasError = true;
     res.actualCharacter = c;
+    res.errorCode = ERROR_UNEXPECTED_CHARACTER;
     // this message should be overriden by more specific error messages
     sprintf(res.errorMessage, "Unexpected character '%c'", res.actualCharacter);
     return res;
@@ -439,7 +564,12 @@ readResult read_checkmate(parser* p) {
 
 readResult read_whitespace(parser* p) {
     // fprintf(stderr, "read_whitespace()\n");
-    return read_one_of_characters(p, " \n");
+    readResult res = read_one_of_characters(p, " \n");
+    readResult tmp;
+    do {
+        tmp = read_one_of_characters(p, " \n");
+    } while (!tmp.hasError);
+    return res;
 }
 
 readResult read_tab(parser* p) {
@@ -458,18 +588,175 @@ readResult read_dash(parser* p) {
     return read_character(p, '-');
 }
 
-parser make_parser(FILE* file) {
-    parser p;
-    p.file = file;
-    p.state = startState;
-    p.line = 1;
-    p.column = 1;
-    p.moveTreeRoot = p.moveTreeTip = new_move_tree();
-    p.moveTreeTip->isRoot = true;
-    p.decisionLevel = 0;
-    p.totalCharacterCount = 0;
-    p.attemptStack.top = -1;
-    return p;
+readResult read_tag_open(parser* p) {
+    return read_character(p, '[');
+}
+
+readResult read_tag_close(parser* p) {
+    return read_character(p, ']');
+}
+
+readResult read_tag_name(parser* p) {
+    readResult res;
+    int i = 0;
+    bool done = false;
+    do {
+        readResult tmp = read_one_of_characters(p, "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ");
+        if (tmp.hasError) {
+            done = true;
+            break;
+        }
+        fprintf(stderr, "got character %c\n", tmp.character);
+        res.tagName[i++] = tmp.character;
+    } while (!done);
+    res.tagName[i++] = 0;
+    res.hasError = false;
+    return res;
+}
+
+readResult read_quoted_string(parser* p) {
+    readResult res;
+    readResult tmp = read_character(p, '"');
+    if (tmp.hasError) {
+        return tmp;
+    }
+    int i = 0;
+    bool escaped = false;
+    do {
+        tmp = read_any_character(p);
+        if (!escaped && tmp.character == '"') {
+            break;
+        }
+        if (!escaped && tmp.character == '\\') {
+            escaped = true;
+            continue;
+        }
+        res.string[i++] = tmp.character;
+        if (escaped) {
+            escaped = false;
+        }
+    } while (!res.hasError);
+
+    res.string[i++] = 0;
+    res.hasError = false;
+    return res;
+}
+
+gameState* parse_fen(char* record) {
+    gameState* game = new_game();
+    char c;
+    int file, rank, offset = 0;
+    int numEmptySquares;
+
+    // board state
+    char* token = strtok(record, " ");
+    for (rank = 7; rank >= 0; --rank) {
+        file = 0;
+        while (token[offset] != 0) {
+            c = token[offset++];
+            if (c == '/') {
+                break;
+            }
+            fprintf(stderr, "fen parse %d %d = %c\n", rank, file, c);
+            switch (c) {
+                case 'p':
+                    game->board[rank][file++] = blackPawn;
+                    break;
+                case 'n':
+                    game->board[rank][file++] = blackKnight;
+                    break;
+                case 'b':
+                    game->board[rank][file++] = blackBishop;
+                    break;
+                case 'r':
+                    game->board[rank][file++] = blackRook;
+                    break;
+                case 'q':
+                    game->board[rank][file++] = blackQueen;
+                    break;
+                case 'k':
+                    game->board[rank][file++] = blackKing;
+                    break;
+                case 'P':
+                    game->board[rank][file++] = whitePawn;
+                    break;
+                case 'N':
+                    game->board[rank][file++] = whiteKnight;
+                    break;
+                case 'B':
+                    game->board[rank][file++] = whiteBishop;
+                    break;
+                case 'R':
+                    game->board[rank][file++] = whiteRook;
+                    break;
+                case 'Q':
+                    game->board[rank][file++] = whiteQueen;
+                    break;
+                case 'K':
+                    game->board[rank][file++] = whiteKing;
+                    break;
+                case '1':
+                case '2':
+                case '3':
+                case '4':
+                case '5':
+                case '6':
+                case '7':
+                case '8':
+                    numEmptySquares = c - '0';
+                    for (int i = 0; i < numEmptySquares; ++i) {
+                        game->board[rank][file++] = empty;
+                    }
+                    break;
+            }
+        }
+    }
+
+    print_board(game->board);
+
+    // playing side
+    token = strtok(record, " ");
+    if (strcmp(token, "w") == 0) {
+        game->sidePlaying = white;
+    } else if (strcmp(token, "b") == 0) {
+        game->sidePlaying = black;
+    } else {
+        // TODO: return error
+    }
+
+    // castling availability
+    token = strtok(record, " ");
+    for (int i = 0; i < strlen(token); ++i) {
+        char c = token[i];
+        switch (c) {
+            case 'K':
+                game->castlingAvailability |= WHITE_CAN_CASTLE_KINGSIDE;
+                break;
+            case 'Q':
+                game->castlingAvailability |= WHITE_CAN_CASTLE_QUEENSIDE;
+                break;
+            case 'k':
+                game->castlingAvailability |= BLACK_CAN_CASTLE_KINGSIDE;
+                break;
+            case 'q':
+                game->castlingAvailability |= BLACK_CAN_CASTLE_QUEENSIDE;
+                break;
+            default:
+                // TODO: invalid character
+                break;
+        }
+    }
+
+    // parse algebraic notation position**(not move) or "-"
+    token = strtok(record, " "); // TODO
+
+    token = strtok(record, " ");
+    game->halfMoveClock = atoi(token);
+
+    token = strtok(record, " ");
+    game->fullMoveNo = atoi(token);
+
+    return game;
 }
 
 parseResult parse_until(parser* p, parserState untilState) {
@@ -510,7 +797,39 @@ parseResult parse_until(parser* p, parserState untilState) {
         }
         switch (p->state) {
             case startState:
-                p->state = beginParseMoveState;
+                p->state = parseTagState;
+                break;
+            case parseTagState:
+                res = read_whitespace(p);
+                res = read_tag_open(p);
+                if (res.hasError) {
+                    p->state = beginParseMoveState;
+                    continue;
+                }
+                res = read_tag_name(p);
+                if (res.hasError) {
+                    sprintf(errorMessage, "%s", res.errorMessage);
+                    continue;
+                }
+                char tagName[256];
+                strncpy(tagName, res.tagName, 256);
+                fprintf(stderr, "got tag %s\n", tagName);
+                res = read_whitespace(p);
+                res = read_quoted_string(p);
+                if (res.hasError) {
+                    sprintf(errorMessage, "%s", res.errorMessage);
+                    continue;
+                }
+                fprintf(stderr, "got tag %s\n", tagName);
+                if (strcmp(tagName, "FEN") == 0) {
+                    fprintf(stderr, "GOT FEN\n");
+                    free(p->initGameState);
+                    p->initGameState = parse_fen(res.string);
+                }
+                res = read_tag_close(p);
+                if (res.hasError) {
+                    sprintf(errorMessage, "%s", res.errorMessage);
+                }
                 break;
             case beginParseMoveState:
                 newMove = new_move_tree();
@@ -738,7 +1057,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 break;
         }
     }
-    return make_parse_tree_result(p->moveTreeRoot);
+    return make_parse_parser_result(p);
 }
 
 parseResult parse_algebraic_notation(char* buffer) {
@@ -755,7 +1074,7 @@ parseResult parse_algebraic_notation(char* buffer) {
     }
 
     if (!res.hasError) {
-        return make_parse_move_result(res.moveTreeRoot->move);
+        return make_parse_move_result(res.parser->moveTreeRoot->move);
     }
 
     return res;
@@ -1125,57 +1444,7 @@ void print_do_not_understand() {
     wprintf(L"%s\n", s);
 }
 
-typedef struct {
-    sidedPiece board[8][8];
-} board;
-
-/** Create a new board having the initial chess position. */
-board make_board() {
-    sidedPiece board_array[8][8] = {
-        { whiteRook, whiteKnight, whiteBishop, whiteQueen, whiteKing, whiteBishop, whiteKnight, whiteRook },
-        { whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn, whitePawn },
-        EMPTY_ROW,
-        EMPTY_ROW,
-        EMPTY_ROW,
-        EMPTY_ROW,
-        { blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn, blackPawn },
-        { blackRook, blackKnight, blackBishop, blackQueen, blackKing, blackBishop, blackKnight, blackRook }
-    };
-    board b;
-    for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 8; ++j) {
-            b.board[i][j] = board_array[i][j];
-        }
-    }
-    return b;
-}
-
-void print_board(sidedPiece board[8][8]) {
-    for (int rank = 7; rank >= 0; rank--) {
-        for (int file = 0; file <= 7; file++) {
-            sidedPiece sp = board[rank][file];
-            pieceEnum p = sp > 0 ? sp : -sp;
-            wchar_t unicodePoint = UNICODE_BLACK_CHESS_PAWN - p + 1;
-            if (p == 0) {
-                unicodePoint = UNICODE_SPACE;
-            }
-            // printf("%lc", board[rank][file]);
-            // wchar_t star = 0x265f;
-            // wprintf(L" %lc ", unicodePoint);
-            int tileColor = (rank+file) % 2 == 0 ? DARK_TILE_COLOR : LIGHT_TILE_COLOR;
-            int pieceColor = sp > 0 ? WHITE_PIECE_COLOR : BLACK_PIECE_COLOR;
-
-            // ansi color coding magic
-            wprintf(L"\e[38;5;%dm\e[48;5;%dm %lc ", pieceColor, tileColor, unicodePoint);
-        }
-        // last rank hidden if not a lot of whitespace
-        wprintf(L"\e[0m\n");
-    }
-    wprintf(L"\n");
-}
-
-void play(moveTree* tree, playerSide userSide, bool blindMode) {
-    board theBoard = make_board();
+void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) {
     char* buffer = (char*)malloc(BUFFER_SIZE*sizeof(char));
     //print_board(theBoard.board);
     print_greeting();
@@ -1183,7 +1452,7 @@ void play(moveTree* tree, playerSide userSide, bool blindMode) {
     moveTree* moveTreeTip = tree;
     if (!blindMode) {
         wprintf(L"\n");
-        print_board(theBoard.board);
+        print_board(game->board);
     }
     if (userSide == black) {
         moveTreeTip = moveTreeTip->firstChoice;
@@ -1191,11 +1460,11 @@ void play(moveTree* tree, playerSide userSide, bool blindMode) {
     while (moveTreeTip != NULL) {
         // printf("currentMove:\n");
         if (!moveTreeTip->isRoot) {
-            board_apply_move(theBoard.board, moveTreeTip->move);
+            board_apply_move(game->board, moveTreeTip->move);
             print_algebraic_notation(moveTreeTip->move);
             wprintf(L"\n");
             if (!blindMode) {
-                print_board(theBoard.board);
+                print_board(game->board);
             }
         }
         if (moveTreeTip->firstChoice == NULL) {
@@ -1229,9 +1498,9 @@ void play(moveTree* tree, playerSide userSide, bool blindMode) {
                 wprintf(L"wrong move! try again:\n");
             } else {
                 moveTreeTip = goToMove;
-                board_apply_move(theBoard.board, moveTreeTip->move);
+                board_apply_move(game->board, moveTreeTip->move);
                 if (!blindMode) {
-                    print_board(theBoard.board);
+                    print_board(game->board);
                 }
                 break;
             }
@@ -1293,5 +1562,5 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "%s", res.errorMessage);
     }
     // print_tree(res.moveTreeRoot->firstChoice);
-    play(res.moveTreeRoot, options.playerSide, options.blindMode);
+    play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
 }

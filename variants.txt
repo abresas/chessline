@@ -1,4 +1,5 @@
-e4 e5 Nf3 Nc6 Bb5
+[FEN "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 2 2"]
+Nf3 Nc6 Bb5
 	33% Nf6 O-O
 		Nxe4 Re1
 			20% d6 d4
