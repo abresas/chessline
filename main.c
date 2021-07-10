@@ -85,6 +85,7 @@ typedef struct moveTreeTag {
     int decisionLevel;
     int probability;
     bool isRoot;
+    int fullMoveNo;
     struct moveTreeTag* firstChoice;
     struct moveTreeTag* nextChoice;
     struct moveTreeTag* previousMove;
@@ -143,18 +144,22 @@ typedef struct {
 } readResult;
 
 typedef enum {
-    startState, parseTagState, beginParseMoveState, parseProbabilityState, parseMovePieceState, parseDepartureFileState, parseDepartureRankState,
+    startState, parseTagState, beginParseMoveState,
+    parseMoveNumberOrProbabilityState, parseMoveNumberState,
+    parseProbabilityState, parseMovePieceState, parseDepartureFileState, parseDepartureRankState,
     parseMoveCaptureState, parseMoveDestinationState, parseMovePromotionState, parseMoveCheckState, parseMoveCheckmateState,
     parseAlgebraicNotation, parseShortCastlingState, parseLongCastlingState,
-    finishParseMoveState, parseWhitespaceState, parseIndentationLevelState,
+    finishParseMoveState, parseWhitespaceState,
     parseDepartureOrDestinationState, noDepartureState, endState
 } parserState;
 
 static const char* stateStrings[] = {
-    "start", "parse_tag", "start_parse_move", "parse_probability", "parse_move_piece", "parse_departure_file", "parse_departure_rank",
+    "start", "parse_tag", "start_parse_move",
+    "parse_move_number_or_probability", "parse_move_number",
+    "parse_probability", "parse_move_piece", "parse_departure_file", "parse_departure_rank",
     "parse_capture", "parse_destination", "parse_promotion", "parse_check", "parse_checkmate",
     "start_algebraic_notation_move", "parse_short_castling", "parse_long_castling",
-    "end_parse_move", "parse_whitespace", "parse_indentation_level",
+    "end_parse_move", "parse_whitespace",
     "departure_or_destination", "no_departure", "end"
 };
 
@@ -185,7 +190,7 @@ parserAttempt* pop_attempt(parserAttemptStack* attemptStack) {
 }
 
 void push_attempt(parserAttemptStack* attemptStack, parserAttempt attempt) {
-    //fprintf(stderr, "push_attempt() (top=%d)\n", attemptStack->top);
+    // fprintf(stderr, "push_attempt() (top=%d)\n", attemptStack->top);
     attemptStack->array[++attemptStack->top] = attempt;
 }
 
@@ -245,7 +250,6 @@ typedef struct {
     char errorMessage[ERROR_MESSAGE_SIZE];
     int decisionLevel;
     parserState state;
-    move* currentMove;
     moveTree* moveTreeTip;
     moveTree* moveTreeRoot;
     int totalCharacterCount;
@@ -260,7 +264,9 @@ parser make_parser(FILE* file) {
     p.line = 1;
     p.column = 1;
     p.moveTreeRoot = p.moveTreeTip = new_move_tree();
+    p.moveTreeTip->move->side = black;
     p.moveTreeTip->isRoot = true;
+    p.moveTreeTip->fullMoveNo = 0;
     p.decisionLevel = 0;
     p.totalCharacterCount = 0;
     p.attemptStack.top = -1;
@@ -281,7 +287,7 @@ parseResult make_parse_error(parser* p, char* msg) {
     parseResult res;
     res.hasError = true;
     strncpy(res.errorMessage, msg, ERROR_MESSAGE_SIZE);
-    sprintf(res.errorMessage, "parser error: %s at line %d, column %d", msg, p->line, p->column);
+    sprintf(res.errorMessage, "/arser error: %s at line %d, column %d", msg, p->line, p->column);
     return res;
 }
 
@@ -362,6 +368,7 @@ readResult read_any_character(parser* p) {
         return res;
     }
     char c = p->buffer[p->bufferCursor];
+    // fprintf(stderr, "read any character: %c\n", c);
     p->bufferCursor++;
     p->totalCharacterCount++;
     p->column++;
@@ -382,6 +389,7 @@ readResult read_character(parser* p, char c) {
         sprintf(res.errorMessage, "Unexpected end of file");
         return res;
     }
+    // fprintf(stderr, "read character: %c\n", p->buffer[p->bufferCursor]);
     if (p->buffer[p->bufferCursor] == c) {
         p->bufferCursor++;
         p->totalCharacterCount++;
@@ -395,7 +403,8 @@ readResult read_character(parser* p, char c) {
     } else {
         res.errorCode = ERROR_UNEXPECTED_CHARACTER;
         res.hasError = true;
-        sprintf(res.errorMessage, "Expected %c, got '%c'", c, p->buffer[p->bufferCursor]);
+        res.actualCharacter = c;
+        sprintf(res.errorMessage, "Expected %c, got '%c'\n", c, p->buffer[p->bufferCursor]);
     }
     return res;
 }
@@ -409,6 +418,7 @@ readResult read_one_of_characters(parser* p, char* cs) {
         return res;
     }
     char c = p->buffer[p->bufferCursor];
+    // fprintf(stderr, "read one of characters: %c\n", c);
     // fprintf(stderr, "got character %c\n", c);
     for (int i = 0; i < strlen(cs); ++i) {
         char t = cs[i];
@@ -440,9 +450,13 @@ readResult read_digit(parser* p) {
     // fprintf(stderr, "buffer cursor (C): %d\n", p->bufferCursor);
     readResult res = read_one_of_characters(p, "0123456789");
     if (res.hasError) {
-        // fprintf(stderr, "digit error\n");
-        sprintf(res.errorMessage, "Expected a digit, got '%c'", res.actualCharacter);
-        return res;
+        if (res.errorCode == ERROR_UNEXPECTED_CHARACTER) {
+            // fprintf(stderr, "digit error\n");
+            sprintf(res.errorMessage, "Expected a digit, got '%c'", res.actualCharacter);
+            return res;
+        } else {
+            return res;
+        }
     }
     // fprintf(stderr, "digit no error\n");
     res.digit = res.character - '0';
@@ -452,8 +466,12 @@ readResult read_digit(parser* p) {
 readResult read_integer(parser* p) {
     readResult res = read_digit(p);
     if (res.hasError) {
-        sprintf(res.errorMessage, "Expected a number, got '%c'", res.actualCharacter);
-        return res;
+        if (res.errorCode == ERROR_UNEXPECTED_CHARACTER) {
+            sprintf(res.errorMessage, "Expected a number, got '%c'\n", res.actualCharacter);
+            return res;
+        } else {
+            return res;
+        }
     }
     res.integer = res.digit;
     // fprintf(stderr, "initial integer is %d\n", res.integer);
@@ -470,7 +488,7 @@ readResult read_integer(parser* p) {
 readResult read_chess_file(parser* p) {
     readResult res = read_one_of_characters(p, "abcdefgh");
     if (res.hasError) {
-        sprintf(res.errorMessage, "Expected a rank (1-8), got '%c'", res.actualCharacter);
+        sprintf(res.errorMessage, "Expected a rank (1-8), got %d\n", res.actualCharacter);
         return res;
     }
     switch (res.character) {
@@ -564,10 +582,10 @@ readResult read_checkmate(parser* p) {
 
 readResult read_whitespace(parser* p) {
     // fprintf(stderr, "read_whitespace()\n");
-    readResult res = read_one_of_characters(p, " \n");
+    readResult res = read_one_of_characters(p, " \t\n");
     readResult tmp;
     do {
-        tmp = read_one_of_characters(p, " \n");
+        tmp = read_one_of_characters(p, " \t\n");
     } while (!tmp.hasError);
     return res;
 }
@@ -606,7 +624,7 @@ readResult read_tag_name(parser* p) {
             done = true;
             break;
         }
-        fprintf(stderr, "got character %c\n", tmp.character);
+        // fprintf(stderr, "got character %c\n", tmp.character);
         res.tagName[i++] = tmp.character;
     } while (!done);
     res.tagName[i++] = 0;
@@ -657,7 +675,6 @@ gameState* parse_fen(char* record) {
             if (c == '/') {
                 break;
             }
-            fprintf(stderr, "fen parse %d %d = %c\n", rank, file, c);
             switch (c) {
                 case 'p':
                     game->board[rank][file++] = blackPawn;
@@ -711,8 +728,6 @@ gameState* parse_fen(char* record) {
             }
         }
     }
-
-    print_board(game->board);
 
     // playing side
     token = strtok(record, " ");
@@ -784,7 +799,7 @@ parseResult parse_until(parser* p, parserState untilState) {
             if (att != NULL) {
                 // NOTE: the attempts must not have altered move tree
                 int shiftAmount = p->totalCharacterCount - att->initialCharacterCount;
-                // fprintf(stderr, "Attempt failed, backtracking to state %s and shifting input by %d\n", state_to_string(att->stateOnFailure), shiftAmount);
+                // fprintf(stderr, "Attempt failed due to \"%s\", backtracking to state %s and shifting input by %d\n", errorMessage, state_to_string(att->stateOnFailure), shiftAmount);
                 p->state = att->stateOnFailure;
                 p->line = att->line;
                 p->column = att->column;
@@ -803,7 +818,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 res = read_whitespace(p);
                 res = read_tag_open(p);
                 if (res.hasError) {
-                    p->state = beginParseMoveState;
+                    p->state = parseMoveNumberOrProbabilityState;
                     continue;
                 }
                 res = read_tag_name(p);
@@ -813,16 +828,16 @@ parseResult parse_until(parser* p, parserState untilState) {
                 }
                 char tagName[256];
                 strncpy(tagName, res.tagName, 256);
-                fprintf(stderr, "got tag %s\n", tagName);
+                // fprintf(stderr, "got tag %s\n", tagName);
                 res = read_whitespace(p);
                 res = read_quoted_string(p);
                 if (res.hasError) {
                     sprintf(errorMessage, "%s", res.errorMessage);
                     continue;
                 }
-                fprintf(stderr, "got tag %s\n", tagName);
+                // fprintf(stderr, "got tag %s\n", tagName);
                 if (strcmp(tagName, "FEN") == 0) {
-                    fprintf(stderr, "GOT FEN\n");
+                    // fprintf(stderr, "GOT FEN\n");
                     free(p->initGameState);
                     p->initGameState = parse_fen(res.string);
                 }
@@ -838,11 +853,73 @@ parseResult parse_until(parser* p, parserState untilState) {
                     continue;
                 }
                 newMove->decisionLevel = decisionLevel;
+                newMove->fullMoveNo = currentMove->side == white ? p->moveTreeTip->fullMoveNo : p->moveTreeTip->fullMoveNo + 1;
                 newMove->move->side = currentMove->side == white ? black : white;
                 append_move(p->moveTreeTip, newMove);
                 p->moveTreeTip = newMove;
                 p->state = parseProbabilityState;
                 currentMove = p->moveTreeTip->move;
+                break;
+            case parseMoveNumberOrProbabilityState:
+                newAttempt.line = p->line;
+                newAttempt.column = p->column;
+                newAttempt.initialCharacterCount = p->totalCharacterCount;
+                newAttempt.stateOnFailure = beginParseMoveState;
+                push_attempt(&p->attemptStack, newAttempt);
+                p->state = parseMoveNumberState;
+                break;
+            case parseMoveNumberState:
+                res = read_integer(p);
+                if (res.hasError) {
+                    if (res.errorCode == ERROR_EOF) {
+                        p->state = endState;
+                        continue;
+                    }
+                    sprintf(errorMessage, "%s", res.errorMessage);
+                    continue;
+                }
+                int goToMove = res.integer;
+                if (goToMove < 1) {
+                    sprintf(errorMessage, "Move number cannot be less than 1, got %d\n", goToMove);
+                }
+                res = read_character(p, '.');
+                if (res.hasError) {
+                    sprintf(errorMessage, "%s", res.errorMessage);
+                    continue;
+                }
+                playerSide side = white;
+                res = read_character(p, '.');
+                if (!res.hasError) {
+                    res = read_character(p, '.');
+                    if (res.hasError) {
+                        sprintf(errorMessage, "%s", res.errorMessage);
+                        continue;
+                    }
+                    side = black;
+                }
+                res = read_whitespace(p);
+
+                // move tree tip to previous from target, not target
+                if (side == black) {
+                    side = white;
+                } else {
+                    side = black;
+                    goToMove--;
+                }
+
+                if (goToMove > p->moveTreeTip->fullMoveNo) {
+                    sprintf(errorMessage, "Skipped move number. Current move number: %d, got %d\n", p->moveTreeTip->fullMoveNo, goToMove);
+                    continue;
+                }
+
+                // fprintf(stderr, "moving %d -> %d\n", p->moveTreeTip->fullMoveNo, goToMove);
+
+                while (goToMove < p->moveTreeTip->fullMoveNo || side != p->moveTreeTip->move->side) {
+                    p->moveTreeTip = p->moveTreeTip->previousMove;
+                    currentMove = p->moveTreeTip->move;
+                }
+
+                p->state = beginParseMoveState;
                 break;
             case parseProbabilityState:
                 res = read_integer(p);
@@ -859,9 +936,12 @@ parseResult parse_until(parser* p, parserState untilState) {
                         continue;
                     }
                 } else {
+                    // fprintf(stderr, "probability error %s\n", res.errorMessage);
                     p->moveTreeTip->probability = 100;
                 }
+                // fprintf(stderr, "move probability %d\n", p->moveTreeTip->probability);
                 p->state = parseAlgebraicNotation;
+                pop_attempt(&p->attemptStack);
                 break;
             case parseAlgebraicNotation:
                 res = read_castling_symbol(p);
@@ -1013,40 +1093,7 @@ parseResult parse_until(parser* p, parserState untilState) {
                 while (!res.hasError && res.character != '\n') {
                     res = read_whitespace(p);
                 }
-                if (res.character == '\n') {
-                    p->state = parseIndentationLevelState;
-                } else { // end of whitespace, read character
-                    p->state = beginParseMoveState;
-                }
-                break;
-            case parseIndentationLevelState:
-                decisionLevel = 0;
-                res = read_tab(p);
-                while (!res.hasError) {
-                    decisionLevel += 1;
-                    res = read_tab(p);
-                }
-                // fprintf(stderr, "%s\n", res.errorMessage);
-
-                if (strcmp(res.errorMessage, "Unexpected end of file") == 0) {
-                    p->state = endState;
-                    continue;
-                }
-
-                while (p->moveTreeTip != NULL && p->moveTreeTip->decisionLevel != decisionLevel - 1) {
-                    p->moveTreeTip = p->moveTreeTip->previousMove;
-                    if (p->moveTreeTip != NULL) {
-                        currentMove = p->moveTreeTip->move;
-                    } else {
-                        currentMove = NULL;
-                    }
-                }
-                if (p->moveTreeTip == NULL) {
-                    fprintf(stderr, "indentation error. Make sure you use tabs instead of spaces.\n");
-                    exit(1);
-                }
-                p->decisionLevel = decisionLevel;
-                p->state = beginParseMoveState;
+                p->state = parseMoveNumberOrProbabilityState;
                 break;
             case endState:
                 break;
@@ -1560,6 +1607,7 @@ int main(int argc, char *argv[]) {
     parseResult res = parse_variants(fp);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
+        return 1;
     }
     // print_tree(res.moveTreeRoot->firstChoice);
     play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
