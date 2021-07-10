@@ -1,5 +1,5 @@
 [FEN "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 2 2"]
-1. Nf3 Nc6 2. Bb5
+1. Nf3 Nc6 Bb5
     2... 33% Nf6 3. O-O Nxe4 4. Re1
         4... 20% d6 5. d4
         4... 40% Nf6 5. Nxe5
