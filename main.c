@@ -316,13 +316,14 @@ gameState* parse_fen(char* record) {
     }
 
     // playing side
-    token = strtok(record, " ");
+    token = strtok(NULL, " ");
     if (strcmp(token, "w") == 0) {
         game->sidePlaying = white;
     } else if (strcmp(token, "b") == 0) {
         game->sidePlaying = black;
     } else {
-        // TODO: return error
+        fprintf(stderr, "failed to read playing side %s\n", token);
+        return NULL;
     }
 
     // castling availability
@@ -579,6 +580,9 @@ parseResult simple_parse(parser* p) {
                 return make_parse_error(p, errorMessage);
             }
             p->initGameState = parse_fen(res.token);
+            if (p->initGameState == NULL) {
+                return make_parse_error(p, "Invalid FEN\n");
+            }
             p->moveTreeRoot->move->side = p->initGameState->sidePlaying == white ? black : white;
             state = 4;
             continue;
@@ -600,7 +604,11 @@ parseResult simple_parse(parser* p) {
             if (res.side == black) {
                 targetHalfMoveNo += 1;
             }
-            if (targetHalfMoveNo == p->moveTreeTip->halfMoveNo + 1) {
+            if (p->moveTreeTip->isRoot) {
+                // first move number dictates how moves are counted
+                p->moveTreeTip->halfMoveNo = targetHalfMoveNo - 1;
+                continue;
+            } else if (targetHalfMoveNo == p->moveTreeTip->halfMoveNo + 1) {
                 continue;
             } else if (targetHalfMoveNo > p->moveTreeTip->halfMoveNo + 1) {
                 sprintf(errorMessage, "Wrong move number, skipped moves. %d vs %d\n", targetHalfMoveNo, p->moveTreeTip->halfMoveNo);
