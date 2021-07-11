@@ -7,7 +7,6 @@
 #include <math.h>
 #include <locale.h>
 #include <wchar.h>
-#include <regex.h>
 
 #define BUFFER_SIZE 257
 // backtrack needed because what may look like a departure position may be destination position
@@ -38,6 +37,10 @@
 typedef enum {symbolToken = 1, fullMoveToken = 2, openTagToken = 3, closeTagToken = 4, quotedStringToken = 5, probabilityToken = 6} tokenType;
 typedef enum {white, black} playerSide;
 typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
+char pieceSymbol[] = {'P', 'N', 'B', 'R', 'Q', 'K'};
+// map offset from letter 'B' => piece enum, -1 for invalid pieces
+int8_t pieceLookup[] = {3, -1, -1, -1, -1, -1, -1, -1, -1, 6, -1, -1, 2, -1, 1, 5, 4};
+
 typedef enum {empty = 0, blackPawn = -1, blackKnight = -2, blackBishop = -3, blackRook = -4, blackQueen = -5, blackKing = -6, whitePawn = 1, whiteKnight = 2, whiteBishop = 3, whiteRook = 4, whiteQueen = 5, whiteKing = 6} sidedPiece;
 typedef enum {aFile = 1, bFile = 2, cFile = 3, dFile = 4, eFile = 5, fFile = 6, gFile = 7, hFile = 8} chessFile;
 
@@ -261,56 +264,17 @@ gameState* parse_fen(char* record) {
             if (c == '/') {
                 break;
             }
-            switch (c) {
-                case 'p':
-                    game->board[rank][file++] = blackPawn;
-                    break;
-                case 'n':
-                    game->board[rank][file++] = blackKnight;
-                    break;
-                case 'b':
-                    game->board[rank][file++] = blackBishop;
-                    break;
-                case 'r':
-                    game->board[rank][file++] = blackRook;
-                    break;
-                case 'q':
-                    game->board[rank][file++] = blackQueen;
-                    break;
-                case 'k':
-                    game->board[rank][file++] = blackKing;
-                    break;
-                case 'P':
-                    game->board[rank][file++] = whitePawn;
-                    break;
-                case 'N':
-                    game->board[rank][file++] = whiteKnight;
-                    break;
-                case 'B':
-                    game->board[rank][file++] = whiteBishop;
-                    break;
-                case 'R':
-                    game->board[rank][file++] = whiteRook;
-                    break;
-                case 'Q':
-                    game->board[rank][file++] = whiteQueen;
-                    break;
-                case 'K':
-                    game->board[rank][file++] = whiteKing;
-                    break;
-                case '1':
-                case '2':
-                case '3':
-                case '4':
-                case '5':
-                case '6':
-                case '7':
-                case '8':
-                    numEmptySquares = c - '0';
-                    for (int i = 0; i < numEmptySquares; ++i) {
-                        game->board[rank][file++] = empty;
-                    }
-                    break;
+            if (c >= '1' && c <= '8') {
+                numEmptySquares = c - '0';
+                for (int i = 0; i < numEmptySquares; ++i) {
+                    game->board[rank][file++] = empty;
+                }
+            } else {
+                if (c < 'a') { // uppercase = white pieces
+                    game->board[rank][file++] = pieceLookup[c - 'B'];
+                } else {
+                    game->board[rank][file++] = -pieceLookup[c - 'b'];
+                }
             }
         }
     }
@@ -373,33 +337,54 @@ typedef struct {
     bool eol;
 } lexResult;
 
-char* lexBuffer = NULL;
-lexResult lexical_analysis(char* buffer) {
+/**
+ * Lexical analyzer with interface similar to strtok_r().
+ * Call with the buffer value and then subsequently with NULL and the same saveptr argument as in the first call.
+ * saveptr should not be modified between calls, as it is managed by next_token.
+ *
+ * The lexer recognizes 6 distinct token types, defined in tokenType enum.
+ */
+lexResult next_token(char* buffer, char** saveptr) {
     lexResult res;
     res.number = res.hasError = 0;
+
+    // use lexBuffer internally, saveptr always points to address at lexBuffer
+    char* lexBuffer;
     if (buffer != NULL) {
         lexBuffer = buffer;
+    } else {
+        lexBuffer = *saveptr;
     }
+
     // ignore whitespace
     while (*lexBuffer == ' ' || *lexBuffer == '\t' || *lexBuffer == '\n') {
         lexBuffer = lexBuffer + 1;
+        *saveptr = lexBuffer;
     }
+
+    // handle end of line before any characters
     if (*lexBuffer == 0) {
         res.eol = true;
         return res;
     }
     res.eol = false;
+
+    // tag-specific tokens: open tag, close tag (single character) and strings within quotes
     char c = *lexBuffer;
     int i = 0;
     if (c == '[') {
         res.tokenType = openTagToken;
         lexBuffer += 1;
+        *saveptr = lexBuffer;
         return res;
     } else if (c == ']') {
         res.tokenType = closeTagToken;
         lexBuffer += 1;
+        *saveptr = lexBuffer;
         return res;
     } else if (c == '"') {
+        // quoted strings are handled separately as whitespace within them
+        // does not separate tokens
         res.tokenType = quotedStringToken;
         i += 1;
         while (true) {
@@ -418,30 +403,43 @@ lexResult lexical_analysis(char* buffer) {
             i++;
         }
         lexBuffer += i;
+        *saveptr = lexBuffer;
         return res;
     }
 
+    // any other token is separated by whitespace
+
+    // read token until whitespace keeping track if the symbol may be move number or probability
+    bool isNumeric = true;
     while (i < strlen(lexBuffer) && lexBuffer[i] != ' ' && lexBuffer[i] != '\t' && lexBuffer[i] != '\n') {
         res.token[i] = lexBuffer[i];
+        if ((lexBuffer[i] < '0' || lexBuffer[i] > '9') && lexBuffer[i] != '.' && lexBuffer[i] != '%') {
+            isNumeric = false;
+        }
         i++;
     }
     res.token[i] = 0;
+
     if (strlen(res.token) == 0) {
         res.eol = true;
         return res;
     }
+
+    // recognize full move or probability notation
     lexBuffer += strlen(res.token);
-    if (strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '.') {
+    *saveptr = lexBuffer;
+    if (isNumeric && strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '.') {
         res.tokenType = fullMoveToken;
         res.number = atoi(res.token);
         res.side = res.token[strlen(res.token)-2] == '.' ? black : white;
         return res;
-    } else if (strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '%') {
+    } else if (isNumeric && strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '%') {
         res.tokenType = probabilityToken;
         res.number = atoi(res.token);
         return res;
     }
-    // else
+
+    // treat everything else as a generic symbol (move algebraic notation and tag names)
     res.tokenType = symbolToken;
     return res;
 }
@@ -468,8 +466,6 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
         return NULL;
     }
     int i = 0;
-    // map offset from letter 'B' => piece enum, -1 for invalid pieces
-    int8_t pieceLookup[] = {3, -1, -1, -1, -1, -1, -1, -1, -1, 6, -1, -1, 2, -1, 1, 5, 4};
     if (buffer[i] >= 'B' && buffer[i] <= 'R') {
         m->piece = pieceLookup[buffer[i++] - 'B'];
         if (m->piece == -1) {
@@ -517,7 +513,7 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
     return m;
 }
 
-parseResult simple_parse(parser* p) {
+parseResult parse(parser* p) {
     char buffer[BUFFER_SIZE];
     bool readTags = true;
     char tagName[BUFFER_SIZE];
@@ -529,12 +525,13 @@ parseResult simple_parse(parser* p) {
     char* buf = fgets(buffer, BUFFER_SIZE, p->file);
     p->moveTreeTip->move->side = black; // initialize
     lexResult res;
+    char* lexerPtr;
     while (true) {
         // fprintf(stderr, "STATE: %d\n", state);
         if (startLine == 1) {
-            res = lexical_analysis(buffer);
+            res = next_token(buffer, &lexerPtr);
         } else {
-            res = lexical_analysis(NULL);
+            res = next_token(NULL, &lexerPtr);
         }
 
         startLine = 0;
@@ -656,31 +653,8 @@ parseResult simple_parse(parser* p) {
 }
 
 void print_position(position pos) {
-    switch (pos.file) {
-        case aFile:
-            wprintf(L"a");
-            break;
-        case bFile:
-            wprintf(L"b");
-            break;
-        case cFile:
-            wprintf(L"c");
-            break;
-        case dFile:
-            wprintf(L"d");
-            break;
-        case eFile:
-            wprintf(L"e");
-            break;
-        case fFile:
-            wprintf(L"f");
-            break;
-        case gFile:
-            wprintf(L"g");
-            break;
-        case hFile:
-            wprintf(L"h");
-            break;
+    if (pos.file) {
+        wprintf(L"%c", 'a' + pos.file - 1);
     }
     if (pos.rank) {
         wprintf(L"%d", pos.rank);
@@ -688,28 +662,10 @@ void print_position(position pos) {
 }
 
 void print_piece(pieceEnum p) {
-    switch (p) {
-        case pawn:
-            break;
-        case knight:
-            wprintf(L"N");
-            break;
-        case bishop:
-            wprintf(L"B");
-            break;
-        case rook:
-            wprintf(L"R");
-            break;
-        case queen:
-            wprintf(L"Q");
-            break;
-        case king:
-            wprintf(L"K");
-            break;
-        default:
-            fprintf(stderr, "Unexpected piece in move: %d\n", p);
-            exit(1);
+    if (p == pawn) {
+        return;
     }
+    wprintf(L"%c", pieceSymbol[p-1]);
 }
 
 void print_algebraic_notation(move* m) {
@@ -1136,7 +1092,7 @@ int main(int argc, char *argv[]) {
     FILE* fp = fopen(options.inputPath, "r");
 
     parser p = make_parser(fp);
-    parseResult res = simple_parse(&p);
+    parseResult res = parse(&p);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
         return 1;
