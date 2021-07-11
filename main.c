@@ -9,7 +9,7 @@
 #include <wchar.h>
 #include <regex.h>
 
-#define BUFFER_SIZE 256
+#define BUFFER_SIZE 257
 // backtrack needed because what may look like a departure position may be destination position
 #define BACKTRACK_SIZE 8
 #define ERROR_MESSAGE_SIZE 256
@@ -35,6 +35,7 @@
 #define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
 #define MATCHED(p,i) (p[i].rm_so != (size_t)-1 && p[i].rm_so != p[i].rm_eo)
 
+typedef enum {symbolToken = 1, fullMoveToken = 2, openTagToken = 3, closeTagToken = 4, quotedStringToken = 5, probabilityToken = 6} tokenType;
 typedef enum {white, black} playerSide;
 typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
 typedef enum {empty = 0, blackPawn = -1, blackKnight = -2, blackBishop = -3, blackRook = -4, blackQueen = -5, blackKing = -6, whitePawn = 1, whiteKnight = 2, whiteBishop = 3, whiteRook = 4, whiteQueen = 5, whiteKing = 6} sidedPiece;
@@ -49,16 +50,15 @@ void print_board(sidedPiece board[8][8]) {
             if (p == 0) {
                 unicodePoint = UNICODE_SPACE;
             }
-            // printf("%lc", board[rank][file]);
-            // wchar_t star = 0x265f;
-            // wprintf(L" %lc ", unicodePoint);
+
             int tileColor = (rank+file) % 2 == 0 ? DARK_TILE_COLOR : LIGHT_TILE_COLOR;
             int pieceColor = sp > 0 ? WHITE_PIECE_COLOR : BLACK_PIECE_COLOR;
 
-            // ansi color coding magic
+            // set foreground color, set background color and print unicode point
+            // only half of the chess piece appears unless there is a space after it
             wprintf(L"\e[38;5;%dm\e[48;5;%dm %lc ", pieceColor, tileColor, unicodePoint);
         }
-        // last rank hidden if not a lot of whitespace
+        // reset colors and newline
         wprintf(L"\e[0m\n");
     }
     wprintf(L"\n");
@@ -89,6 +89,7 @@ typedef struct moveTreeTag {
     int probability;
     bool isRoot;
     int fullMoveNo;
+    int halfMoveNo; // from start of game for backtracking, not draw clock
     struct moveTreeTag* firstChoice;
     struct moveTreeTag* nextChoice;
     struct moveTreeTag* previousMove;
@@ -111,7 +112,7 @@ moveTree* new_move_tree() {
     t->firstChoice = NULL;
     t->nextChoice = NULL;
     t->previousMove = NULL;
-    t->isRoot = t->decisionLevel = t->probability = 0;
+    t->isRoot = t->decisionLevel = t->probability = t->fullMoveNo = t->halfMoveNo = 0;
     t->move = new_move();
     return t;
 }
@@ -270,6 +271,7 @@ parser make_parser(FILE* file) {
     p.moveTreeTip->move->side = black;
     p.moveTreeTip->isRoot = true;
     p.moveTreeTip->fullMoveNo = 0;
+    p.moveTreeTip->halfMoveNo = 0;
     p.decisionLevel = 0;
     p.totalCharacterCount = 0;
     p.attemptStack.top = -1;
@@ -290,7 +292,7 @@ parseResult make_parse_error(parser* p, char* msg) {
     parseResult res;
     res.hasError = true;
     strncpy(res.errorMessage, msg, ERROR_MESSAGE_SIZE);
-    sprintf(res.errorMessage, "/arser error: %s at line %d, column %d", msg, p->line, p->column);
+    sprintf(res.errorMessage, "parser error: %s at line %d, column %d", msg, p->line, p->column);
     return res;
 }
 
@@ -1110,16 +1112,311 @@ parseResult parse_until(parser* p, parserState untilState) {
     return make_parse_parser_result(p);
 }
 
-void simple_parse(parser* p, char* buffer) {
-    // while more tags: read tag
-    // while more move nodes:
-    //  read move number with dot(s) (optional)
-    //  read probability with % (optional)
-    //  read algebraic notation
-    // at every step, increase parser column and line
+typedef struct {
+    bool hasError;
+    tokenType tokenType;
+    char token[256];
+    int number;
+    playerSide side;
+    char errorMessage[256];
+    bool terminated;
+    bool eol;
+} lexResult;
+
+char* lexBuffer = NULL;
+lexResult lexical_analysis(char* buffer) {
+    fprintf(stderr, "lex buffer initial %s\n", buffer);
+    lexResult res;
+    res.number = res.hasError = 0;
+    if (buffer != NULL) {
+        lexBuffer = buffer;
+    }
+    fprintf(stderr, "lexbuffer initial %s\n", lexBuffer);
+    // ignore whitespace
+    while (*lexBuffer == ' ' || *lexBuffer == '\t' || *lexBuffer == '\n') {
+        lexBuffer = lexBuffer + 1;
+    }
+    if (*lexBuffer == 0) {
+        res.eol = true;
+        return res;
+    }
+    res.eol = false;
+    char c = *lexBuffer;
+    int i = 0;
+    if (c == '[') {
+        res.tokenType = openTagToken;
+        lexBuffer += 1;
+        return res;
+    } else if (c == ']') {
+        res.tokenType = closeTagToken;
+        lexBuffer += 1;
+        return res;
+    } else if (c == '"') {
+        res.tokenType = quotedStringToken;
+        i += 1;
+        while (true) {
+            if (i >= strlen(lexBuffer)) {
+                res.hasError = true;
+                sprintf(res.errorMessage, "Unterminated quoted string.");
+                return res;
+            }
+            c = lexBuffer[i];
+            if (c == '"') {
+                res.token[i-1] = 0;
+                i++;
+                break;
+            }
+            fprintf(stderr, "in quoted string got char %c\n", c);
+            res.token[i-1] = c;
+            i++;
+        }
+        lexBuffer += i;
+        return res;
+    }
+
+    fprintf(stderr, "lexbuffer before parse %s\n", lexBuffer);
+    while (i < strlen(lexBuffer) && lexBuffer[i] != ' ' && lexBuffer[i] != '\t' && lexBuffer[i] != '\n') {
+        res.token[i] = lexBuffer[i];
+        i++;
+    }
+    res.token[i] = 0;
+    if (strlen(res.token) == 0) {
+        res.eol = true;
+        return res;
+    }
+    lexBuffer += strlen(res.token);
+    fprintf(stderr, "got token %s\n", res.token);
+    fprintf(stderr, "lexbuffer after parse %s\n", lexBuffer);
+    fprintf(stderr, "token length=%ld, last=%c\n", strlen(res.token), res.token[strlen(res.token)-1]);
+    if (strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '.') {
+        res.tokenType = fullMoveToken;
+        res.number = atoi(res.token);
+        res.side = res.token[strlen(res.token)-2] == '.' ? black : white;
+        return res;
+    } else if (strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '%') {
+        res.tokenType = probabilityToken;
+        res.number = atoi(res.token);
+        return res;
+    }
+    // else
+    res.tokenType = symbolToken;
+    fprintf(stderr, "got token type %d\n", res.tokenType);
+    return res;
 }
 
-move* parse_algebraic_notation2(char* buffer) {
+move* parse_algebraic_notation2(move* m, char* buffer) {
+    if (strcmp(buffer, "O-O-O") == 0) {
+        m->isLongCastling = true;
+        m->piece = king;
+        return m;
+    } else if (strcmp(buffer, "O-O") == 0) {
+        m->isShortCastling = true;
+        m->piece = king;
+        return m;
+    }
+    int destinationIndex = -1;
+    for (int i = strlen(buffer)-1; i >= 0; i--) {
+        if (buffer[i] >= 'a' && buffer[i] <= 'h') {
+            destinationIndex = i;
+            break;
+        }
+    }
+    if (destinationIndex == -1) {
+        fprintf(stderr, "missing destination\n");
+        return NULL;
+    }
+    int i = 0;
+    // map offset from letter 'B' => piece enum, -1 for invalid pieces
+    int8_t pieceLookup[] = {3, -1, -1, -1, -1, -1, -1, -1, -1, 6, -1, -1, 2, -1, 1, 5, 4};
+    if (buffer[i] >= 'B' && buffer[i] <= 'R') {
+        m->piece = pieceLookup[buffer[i++] - 'B'];
+        if (m->piece == -1) {
+            fprintf(stderr, "invalid piece\n");
+            return NULL;
+        }
+    } else {
+        m->piece = pawn;
+    }
+    if (buffer[i] >= 'a' && buffer[i] <= 'h' && i < destinationIndex) {
+        m->departurePosition.file = buffer[i++] - 'a' + 1;
+    }
+    if (buffer[i] >= '0' && buffer[i] <= '9' && i < destinationIndex) {
+        m->departurePosition.rank = buffer[i++] - '1' + 1;
+    }
+    if (buffer[i] == 'x') {
+        m->isCapture = true;
+        i++;
+    }
+    if (buffer[i] >= 'a' && buffer[i] <= 'h' && i == destinationIndex) {
+        m->destination.file = buffer[i++] - 'a' + 1;
+    }
+    if (buffer[i] >= '0' && buffer[i] <= '9' && i == destinationIndex+1) {
+        m->destination.rank = buffer[i++] - '1' + 1;
+    }
+    if (buffer[i] == '=' && (buffer[i+1] >= 'B' && buffer[i+1] <= 'R')) {
+        m->promoteTo = pieceLookup[buffer[i+1] - 'B'];
+        if (m->promoteTo <= 0) {
+            fprintf(stderr, "invalid promotion\n");
+            return NULL;
+        }
+        i += 2;
+    }
+    if (buffer[i] == '#') {
+        m->isCheckmate = true;
+        i++;
+    } else if (buffer[i] == '+') {
+        m->isCheck = true;
+        i++;
+    }
+    if (i != strlen(buffer)) {
+        fprintf(stderr, "not fully parsed %d vs %ld\n", i, strlen(buffer));
+        return NULL;
+    }
+    return m;
+}
+
+parseResult simple_parse(parser* p) {
+    char buffer[BUFFER_SIZE];
+    bool readTags = true;
+    char tagName[BUFFER_SIZE];
+    char errorMessage[256];
+    move* m;
+    int state = 0;
+    int startLine = 1;
+    // parse tags
+    char* buf = fgets(buffer, BUFFER_SIZE, p->file);
+    p->moveTreeTip->move->side = black; // initialize
+    lexResult res;
+    while (true) {
+        fprintf(stderr, "STATE: %d\n", state);
+        if (startLine == 1) {
+            res = lexical_analysis(buffer);
+        } else {
+            fprintf(stderr, "CONTINUE\n");
+            res = lexical_analysis(NULL);
+        }
+
+        startLine = 0;
+        fprintf(stderr, "lex result type: %d (len=%ld)\n", res.tokenType, strlen(res.token));
+        if (res.eol) {
+            fprintf(stderr, "EOL**\n");
+            p->line++;
+            char* buf = fgets(buffer, BUFFER_SIZE, p->file);
+            fprintf(stderr, "got new buffer:%s\n", buf);
+            if (buf == NULL && state == 10) {
+                break;
+            }
+            else if (buf == NULL) {
+                return make_parse_error(p, "Unexpected end of file.");
+            }
+            if (strlen(buffer) > 255) {
+                return make_parse_error(p, "Lines must be less than 255 characters.");
+            }
+            startLine = 1;
+            continue;
+        } else if (res.hasError) {
+            return make_parse_error(p, res.errorMessage);
+        }
+
+        if ((state == 0 || state == 1) && res.tokenType != openTagToken) {
+            state = 10;
+            fprintf(stderr, "STATE: %d\n", state);
+        } else if (state == 0 || state == 1) {
+            state = 2;
+            continue;
+        }
+
+        if (state == 2) {
+            if (res.tokenType != symbolToken) {
+                sprintf(errorMessage, "Expected tag name, got %d", res.tokenType);
+                return make_parse_error(p, errorMessage);
+            }
+            strcpy(tagName, res.token);
+            state = 3;
+            continue;
+        }
+
+        if (state == 3) {
+            if (res.tokenType != quotedStringToken) {
+                sprintf(errorMessage, "Expected tag value, got %s", res.token);
+                return make_parse_error(p, errorMessage);
+            }
+            fprintf(stderr, "parse_fen %ld", strlen(res.token));
+            p->initGameState = parse_fen(res.token);
+            p->moveTreeRoot->move->side = p->initGameState->sidePlaying == white ? black : white;
+            state = 4;
+            continue;
+        }
+        
+        if (state == 4) {
+            if (res.tokenType != closeTagToken) {
+                sprintf(errorMessage, "Expected tag close, got %d", res.tokenType);
+                return make_parse_error(p, errorMessage);
+            }
+            state = 1;
+            continue;
+        }
+
+        if (state == 10 && res.tokenType != fullMoveToken) {
+            state = 11;
+            fprintf(stderr, "debug: .%s.\n", res.token);
+            fprintf(stderr, "STATE: %d\n", state);
+        } else if (state == 10) {
+            int targetHalfMoveNo = 2*(res.number-1)+1;
+            if (res.side == black) {
+                targetHalfMoveNo += 1;
+            }
+            fprintf(stderr, "target side %d", res.side);
+            if (targetHalfMoveNo == p->moveTreeTip->halfMoveNo + 1) {
+                continue;
+            } else if (targetHalfMoveNo > p->moveTreeTip->halfMoveNo + 1) {
+                sprintf(errorMessage, "Wrong move number, skipped moves. %d vs %d\n", targetHalfMoveNo, p->moveTreeTip->halfMoveNo);
+                return make_parse_error(p, errorMessage);
+            }
+            // else backtrack to that move
+            fprintf(stderr, "moving %d -> %d", p->moveTreeTip->halfMoveNo, targetHalfMoveNo - 1);
+            while (p->moveTreeTip->halfMoveNo > targetHalfMoveNo - 1) {
+                p->moveTreeTip = p->moveTreeTip->previousMove;
+            }
+            state = 11;
+            continue;
+        }
+        if (state == 11 && res.tokenType != probabilityToken) {
+            p->moveTreeTip->probability = 100;
+            state = 12;
+            fprintf(stderr, "STATE: %d\n", state);
+        } else if (state == 11) {
+            p->moveTreeTip->probability = res.number;
+            state = 12;
+            continue;
+        }
+        if (state == 12) {
+            if (res.tokenType != symbolToken) {
+                sprintf(errorMessage, "Unexpected algebraic notation move, got %s", res.token);
+                return make_parse_error(p, errorMessage);
+            }
+            moveTree* t = new_move_tree();
+            t->fullMoveNo = p->moveTreeTip->move->side == white ? p->moveTreeTip->fullMoveNo : p->moveTreeTip->fullMoveNo + 1;
+            t->halfMoveNo = p->moveTreeTip->halfMoveNo + 1;
+            fprintf(stderr, "NEW HALF MOVE NO: %d\n", t->halfMoveNo);
+            t->move->side = p->moveTreeTip->move->side == white ? black : white;
+            t->move = parse_algebraic_notation2(t->move, res.token);
+            t->move->sidedPiece = t->move->side == white ? t->move->piece : -(t->move->piece);
+            if (t->move == NULL) {
+                sprintf(errorMessage, "Not a valid algebraic notation move: %s", res.token);
+                return make_parse_error(p, errorMessage);
+            }
+            append_move(p->moveTreeTip, t);
+            p->moveTreeTip = t;
+            state = 10;
+            continue;
+        }
+    }
+
+    return make_parse_parser_result(p);
+}
+
+move* parse_algebraic_notation3(char* buffer) {
     regmatch_t pmatch[10];
     regex_t regex;
     for (int i = 0; i < 10; ++i) {
@@ -1280,6 +1577,7 @@ void print_algebraic_notation(move* m) {
 }
 
 void print_tree(moveTree* m) {
+    // TODO fix because decision level is obsolete
     if (m->previousMove && m->previousMove->decisionLevel != m->decisionLevel) {
         wprintf(L"\n");
         for (int i = 0; i < m->decisionLevel; ++i) {
@@ -1293,6 +1591,7 @@ void print_tree(moveTree* m) {
     wprintf(L" ");
     moveTree*c = m->firstChoice;
     while (c != NULL) {
+        wprintf(L"\n");
         print_tree(c);
         c = c->nextChoice;
     }
@@ -1668,13 +1967,38 @@ int main(int argc, char *argv[]) {
     options options = parse_options(argc, argv);
 
     FILE* fp = fopen(options.inputPath, "r");
+    /*
     parseResult res = parse_variants(fp);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
         return 1;
     }
+    */
     // print_tree(res.moveTreeRoot->firstChoice);
     // play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
-    move*m = parse_algebraic_notation2("Nd2xa8=Q#");
-    print_algebraic_notation(m);
+    move*m = new_move();
+    m = parse_algebraic_notation2(m, "Nd2xa8=Q#");
+    // print_algebraic_notation(m);
+
+    /*
+    char buffer[256];
+    strcpy(buffer, "    2... 33% Nf6 O-O Nxe4 4. Re1");
+    lexResult r = lexical_analysis(buffer);
+    while (!r.eol) {
+        fprintf(stderr, "token type=%d\n", r.tokenType);
+        if (r.tokenType == symbolToken || r.tokenType == quotedStringToken) {
+            fprintf(stderr, "symbol=%s\n", r.token);
+        }
+        r = lexical_analysis(NULL);
+    }
+    */
+
+    parser p = make_parser(fp);
+    parseResult res = simple_parse(&p);
+    if (res.hasError) {
+        fprintf(stderr, "%s", res.errorMessage);
+        return 1;
+    }
+    print_tree(p.moveTreeRoot->firstChoice);
+    play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
 }
