@@ -1,8 +1,0 @@
-[FEN "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 2 2"]
-1... Nc6 2. Bb5
-    2... 33% Nf6 O-O Nxe4 4. Re1
-        4... 20% d6 d4
-        4... 40% Nf6 Nxe5
-        4... 40% Nd6 Nxe5
-    2... 33% d6 d4 exd4 Nxd4
-    2... 33% a6 Bxc6
