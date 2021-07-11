@@ -41,9 +41,9 @@ typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
 typedef enum {empty = 0, blackPawn = -1, blackKnight = -2, blackBishop = -3, blackRook = -4, blackQueen = -5, blackKing = -6, whitePawn = 1, whiteKnight = 2, whiteBishop = 3, whiteRook = 4, whiteQueen = 5, whiteKing = 6} sidedPiece;
 typedef enum {aFile = 1, bFile = 2, cFile = 3, dFile = 4, eFile = 5, fFile = 6, gFile = 7, hFile = 8} chessFile;
 
-void print_board(sidedPiece board[8][8]) {
-    for (int rank = 7; rank >= 0; rank--) {
-        for (int file = 0; file <= 7; file++) {
+void print_board(sidedPiece board[8][8], bool aswhite) {
+    for (int rank = aswhite ? 7 : 0; aswhite ? rank >= 0 : rank < 8; aswhite ? rank-- : rank++) {
+        for (int file = aswhite ? 0 : 7; aswhite ? file <= 7 : file >= 0; aswhite ? file++ : file--) {
             sidedPiece sp = board[rank][file];
             pieceEnum p = sp > 0 ? sp : -sp;
             wchar_t unicodePoint = UNICODE_BLACK_CHESS_PAWN - p + 1;
@@ -1019,18 +1019,17 @@ void print_do_not_understand() {
     wprintf(L"%s\n", s);
 }
 
-void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) {
+void play(moveTree* tree, gameState* game, bool blindMode) {
     char* buffer = (char*)malloc(BUFFER_SIZE*sizeof(char));
     //print_board(theBoard.board);
     print_greeting();
     setvbuf(stdin, NULL, _IOLBF, -1);
     moveTree* moveTreeTip = tree;
+    moveTree* moveTreeRoot = tree;
+    bool viewAsWhite = moveTreeRoot->move->side == black;
     if (!blindMode) {
         wprintf(L"\n");
-        print_board(game->board);
-    }
-    if (userSide == black) {
-        moveTreeTip = moveTreeTip->firstChoice;
+        print_board(game->board, viewAsWhite);
     }
     while (moveTreeTip != NULL) {
         // printf("currentMove:\n");
@@ -1039,7 +1038,7 @@ void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) 
             print_algebraic_notation(moveTreeTip->move);
             wprintf(L"\n");
             if (!blindMode) {
-                print_board(game->board);
+                print_board(game->board, viewAsWhite);
             }
         }
         if (moveTreeTip->firstChoice == NULL) {
@@ -1076,7 +1075,7 @@ void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) 
                 moveTreeTip = goToMove;
                 board_apply_move(game->board, moveTreeTip->move);
                 if (!blindMode) {
-                    print_board(game->board);
+                    print_board(game->board, viewAsWhite);
                 }
                 break;
             }
@@ -1089,14 +1088,16 @@ void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) 
 
 typedef struct {
     char* inputPath;
-    playerSide playerSide;
+    bool asBlack;
+    bool asWhite;
     bool blindMode;
 } options;
 
 options init_options() {
     options options;
     options.inputPath = "";
-    options.playerSide = white;
+    options.asBlack = false;
+    options.asWhite = false;
     options.blindMode = false;
     return options;
 }
@@ -1105,9 +1106,9 @@ options parse_options(int argc, char* argv[]) {
     options options = init_options();
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--black") == 0) {
-            options.playerSide = black;
+            options.asBlack = true;
         } else if (strcmp(argv[i], "--white") == 0) {
-            options.playerSide = white;
+            options.asWhite = true;
         } else if (strcmp(argv[i], "--blind") == 0) {
             options.blindMode = true;
         } else if (strlen(options.inputPath) == 0) {
@@ -1141,5 +1142,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     print_tree(p.moveTreeRoot->firstChoice);
-    play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
+    if (options.asWhite && p.moveTreeRoot->move->side != black || options.asBlack && p.moveTreeRoot->move->side != white) {
+        // let computer play first move if tree starts from the other side than user selected
+        res.parser->moveTreeRoot = choose_move(res.parser->moveTreeRoot);
+    }
+    play(res.parser->moveTreeRoot, res.parser->initGameState, options.blindMode);
 }
