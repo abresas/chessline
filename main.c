@@ -10,7 +10,6 @@
 
 #define BUFFER_SIZE 257
 // backtrack needed because what may look like a departure position may be destination position
-#define BACKTRACK_SIZE 8
 #define ERROR_MESSAGE_SIZE 256
 #define DARK_TILE_COLOR 130
 #define LIGHT_TILE_COLOR 223
@@ -25,14 +24,7 @@
 #define BLACK_CAN_CASTLE_KINGSIDE 4
 #define BLACK_CAN_CASTLE_QUEENSIDE 8
 
-#define MAX_TAG_NAME_SIZE 256
-#define MAX_TAG_VALUE_SIZE 256
-
-#define ERROR_EOF 1
-#define ERROR_UNEXPECTED_CHARACTER 2
-
 #define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
-#define MATCHED(p,i) (p[i].rm_so != (size_t)-1 && p[i].rm_so != p[i].rm_eo)
 
 typedef enum {symbolToken = 1, fullMoveToken = 2, openTagToken = 3, closeTagToken = 4, quotedStringToken = 5, probabilityToken = 6} tokenType;
 typedef enum {white, black} playerSide;
@@ -202,19 +194,25 @@ typedef struct {
     gameState* initGameState;
 } parser;
 
-parser make_parser(FILE* file) {
-    parser p;
-    p.file = file;
-    p.line = 1;
-    p.column = 1;
-    p.moveTreeRoot = p.moveTreeTip = new_move_tree();
-    p.moveTreeTip->move->side = black;
-    p.moveTreeTip->isRoot = true;
-    p.moveTreeTip->fullMoveNo = 0;
-    p.moveTreeTip->halfMoveNo = 0;
-    p.decisionLevel = 0;
-    p.totalCharacterCount = 0;
-    p.initGameState = new_game();
+parser* new_parser(FILE* file) {
+    parser* p = (parser*)malloc(sizeof(parser));
+    if (p == NULL) {
+        fprintf(stderr, "Failed to allocate memory for parser");
+        exit(1);
+    }
+
+    p->file = file;
+    p->line = 1;
+    p->column = 1;
+    p->moveTreeRoot = p->moveTreeTip = new_move_tree();
+    p->moveTreeTip->move->side = black;
+    p->moveTreeTip->isRoot = true;
+    p->moveTreeTip->fullMoveNo = 0;
+    p->moveTreeTip->halfMoveNo = 0;
+    p->decisionLevel = 0;
+    p->totalCharacterCount = 0;
+    p->initGameState = new_game();
+
     return p;
 }
 
@@ -329,10 +327,10 @@ gameState* parse_fen(char* record) {
 typedef struct {
     bool hasError;
     tokenType tokenType;
-    char token[256];
+    char token[BUFFER_SIZE];
     int number;
     playerSide side;
-    char errorMessage[256];
+    char errorMessage[ERROR_MESSAGE_SIZE];
     bool terminated;
     bool eol;
 } lexResult;
@@ -517,7 +515,7 @@ parseResult parse(parser* p) {
     char buffer[BUFFER_SIZE];
     bool readTags = true;
     char tagName[BUFFER_SIZE];
-    char errorMessage[256];
+    char errorMessage[ERROR_MESSAGE_SIZE];
     move* m;
     int state = 0;
     int startLine = 1;
@@ -977,9 +975,14 @@ void print_do_not_understand() {
 
 void play(moveTree* tree, gameState* game, bool blindMode) {
     char* buffer = (char*)malloc(BUFFER_SIZE*sizeof(char));
+    if (buffer == NULL) {
+        fprintf(stderr, "failed to allocate memory for input buffer.");
+        exit(1);
+    }
+
     //print_board(theBoard.board);
     print_greeting();
-    setvbuf(stdin, NULL, _IOLBF, -1);
+    // setvbuf(stdin, NULL, _IOLBF, -1);
     moveTree* moveTreeTip = tree;
     moveTree* moveTreeRoot = tree;
     bool viewAsWhite = moveTreeRoot->move->side == black;
@@ -1079,7 +1082,7 @@ options parse_options(int argc, char* argv[]) {
 }
 
 int main(int argc, char *argv[]) {
-    setlocale(LC_ALL, "");
+    setlocale(LC_ALL, ""); // required for unicode to display properly
     srand(time(0));
 
     if (argc < 2) {
@@ -1090,17 +1093,22 @@ int main(int argc, char *argv[]) {
     options options = parse_options(argc, argv);
 
     FILE* fp = fopen(options.inputPath, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Failed to open %s for reading. Make sure file exists and you have permissiont to read it.", options.inputPath);
+        exit(1);
+    }
 
-    parser p = make_parser(fp);
-    parseResult res = parse(&p);
+    parser* p = new_parser(fp);
+    parseResult res = parse(p);
     if (res.hasError) {
         fprintf(stderr, "%s", res.errorMessage);
         return 1;
     }
-    print_tree(p.moveTreeRoot->firstChoice);
-    if (options.asWhite && p.moveTreeRoot->move->side != black || options.asBlack && p.moveTreeRoot->move->side != white) {
+
+    if (options.asWhite && p->moveTreeRoot->move->side != black || options.asBlack && p->moveTreeRoot->move->side != white) {
         // let computer play first move if tree starts from the other side than user selected
-        res.parser->moveTreeRoot = choose_move(res.parser->moveTreeRoot);
+        p->moveTreeRoot = choose_move(p->moveTreeRoot);
     }
-    play(res.parser->moveTreeRoot, res.parser->initGameState, options.blindMode);
+    play(p->moveTreeRoot, p->initGameState, options.blindMode);
+    free(p);
 }
