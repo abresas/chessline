@@ -97,6 +97,10 @@ typedef struct moveTreeTag {
 
 move* new_move() {
     move* m = (move*)malloc(sizeof(move));
+    if (m == NULL) {
+        fprintf(stderr, "failed to allocate memory for new move\n");
+        exit(1);
+    }
     m->departurePosition.file = 0;
     m->departurePosition.rank = 0;
     m->destination.file = 0;
@@ -109,6 +113,10 @@ move* new_move() {
 
 moveTree* new_move_tree() {
     moveTree* t = (moveTree*)malloc(sizeof(moveTree));
+    if (t == NULL) {
+        fprintf(stderr, "failed to allocate memory for new move tree\n");
+        exit(1);
+    }
     t->firstChoice = NULL;
     t->nextChoice = NULL;
     t->previousMove = NULL;
@@ -128,74 +136,6 @@ void append_move(moveTree* previous, moveTree* next) {
         }
         lastChoice->nextChoice = next;
     }
-}
-
-typedef struct {
-    bool hasError;
-    char errorMessage[ERROR_MESSAGE_SIZE];
-    int errorCode;
-    char actualCharacter;
-    union {
-        int integer;
-        int digit;
-        chessFile file;
-        int rank;
-        pieceEnum piece;
-        char character;
-        char tagName[MAX_TAG_NAME_SIZE];
-        char string[MAX_TAG_VALUE_SIZE];
-    };
-} readResult;
-
-typedef enum {
-    startState, parseTagState, beginParseMoveState,
-    parseMoveNumberOrProbabilityState, parseMoveNumberState,
-    parseProbabilityState, parseMovePieceState, parseDepartureFileState, parseDepartureRankState,
-    parseMoveCaptureState, parseMoveDestinationState, parseMovePromotionState, parseMoveCheckState, parseMoveCheckmateState,
-    parseAlgebraicNotation, parseShortCastlingState, parseLongCastlingState,
-    finishParseMoveState, parseWhitespaceState,
-    parseDepartureOrDestinationState, noDepartureState, endState
-} parserState;
-
-static const char* stateStrings[] = {
-    "start", "parse_tag", "start_parse_move",
-    "parse_move_number_or_probability", "parse_move_number",
-    "parse_probability", "parse_move_piece", "parse_departure_file", "parse_departure_rank",
-    "parse_capture", "parse_destination", "parse_promotion", "parse_check", "parse_checkmate",
-    "start_algebraic_notation_move", "parse_short_castling", "parse_long_castling",
-    "end_parse_move", "parse_whitespace",
-    "departure_or_destination", "no_departure", "end"
-};
-
-
-const char* state_to_string(parserState state) {
-    // fprintf(stderr, "state_to_string(%d)\n", state);
-    return stateStrings[state];
-}
-
-typedef struct {
-    int initialCharacterCount;
-    parserState stateOnFailure;
-    int line;
-    int column;
-} parserAttempt;
-
-typedef struct {
-    int top;
-    parserAttempt array[2];
-} parserAttemptStack;
-
-parserAttempt* pop_attempt(parserAttemptStack* attemptStack) {
-    // fprintf(stderr, "pop_attempt() (top=%d)\n", attemptStack->top);
-    if (attemptStack->top == -1) {
-        return NULL;
-    }
-    return &attemptStack->array[attemptStack->top--];
-}
-
-void push_attempt(parserAttemptStack* attemptStack, parserAttempt attempt) {
-    // fprintf(stderr, "push_attempt() (top=%d)\n", attemptStack->top);
-    attemptStack->array[++attemptStack->top] = attempt;
 }
 
 /** Create a new board having the initial chess position. */
@@ -253,18 +193,15 @@ typedef struct {
     int bufferCursor; // offset from start of buffer that we have already read
     char errorMessage[ERROR_MESSAGE_SIZE];
     int decisionLevel;
-    parserState state;
     moveTree* moveTreeTip;
     moveTree* moveTreeRoot;
     int totalCharacterCount;
-    parserAttemptStack attemptStack;
     gameState* initGameState;
 } parser;
 
 parser make_parser(FILE* file) {
     parser p;
     p.file = file;
-    p.state = startState;
     p.line = 1;
     p.column = 1;
     p.moveTreeRoot = p.moveTreeTip = new_move_tree();
@@ -274,7 +211,6 @@ parser make_parser(FILE* file) {
     p.moveTreeTip->halfMoveNo = 0;
     p.decisionLevel = 0;
     p.totalCharacterCount = 0;
-    p.attemptStack.top = -1;
     p.initGameState = new_game();
     return p;
 }
@@ -307,361 +243,6 @@ parseResult make_parse_move_result(move* m) {
     parseResult res;
     res.hasError = false;
     res.move = m;
-    return res;
-}
-
-int read_buffer_initial(parser* p) {
-    // fprintf(stderr, "read_buffer_initial()\n");
-    p->bufferCursor = 0;
-    char* buf = fgets(p->buffer, BUFFER_SIZE, p->file);
-    if (buf) {
-        // printf("got bufer %s\n", buf);
-        p->bufferSize = strlen(p->buffer);
-        return p->bufferSize;
-    } else {
-        return 0;
-    }
-}
-
-int read_buffer(parser* p) {
-    char* newBuffer = (char*)malloc(BUFFER_SIZE*sizeof(char));
-    if (newBuffer == NULL) {
-        fprintf(stderr, "Failed to allocate memory for new buffer.\n");
-        exit(1);
-    }
-
-    // read to a separate buffer first before copying around to not mess up buffer before we are certain we got more input
-    newBuffer = fgets(newBuffer, BUFFER_SIZE-BACKTRACK_SIZE, p->file);
-    if (newBuffer == NULL) {
-        return 0;
-    }
-
-    // fprintf(stderr, "read_buffer()\n");
-    // copy last n characters to the beginning of the buffer (memory)
-    strncpy(p->buffer, p->buffer + p->bufferSize - BACKTRACK_SIZE, BACKTRACK_SIZE);
-
-    // reset cursor
-    p->bufferCursor = BACKTRACK_SIZE;
-
-    // write after the memory section the bytes that were read
-    strncpy(p->buffer + BACKTRACK_SIZE, newBuffer, strlen(newBuffer));
-
-    // fprintf(stderr, "new buffer '%s'\n", p->buffer);
-    p->bufferSize = BACKTRACK_SIZE + strlen(newBuffer);
-
-    free(newBuffer);
-
-    return p->bufferSize;
-    // fprintf(stderr, "got %d bytes\n", num);
-}
-
-int read_buffer_if_needed(parser* p) {
-    // fprintf(stderr, "read_buffer_if_needed()\n");
-    // fprintf(stderr, "buffer cursor %d vs size %d\n", p->bufferCursor, p->bufferSize);
-    if (p->bufferCursor == p->bufferSize) {
-        return read_buffer(p);
-    }
-    return -1;
-}
-
-readResult read_any_character(parser* p) {
-    readResult res;
-    if (read_buffer_if_needed(p) == 0) {
-        res.hasError = true;
-        res.errorCode = ERROR_EOF;
-        sprintf(res.errorMessage, "Unexpected end of file");
-        return res;
-    }
-    char c = p->buffer[p->bufferCursor];
-    // fprintf(stderr, "read any character: %c\n", c);
-    p->bufferCursor++;
-    p->totalCharacterCount++;
-    p->column++;
-    if (c == '\n') {
-        p->column = 1;
-        p->line++;
-    }
-    res.hasError = false;
-    res.character = c;
-    return res;
-}
-
-readResult read_character(parser* p, char c) {
-    readResult res;
-    if (read_buffer_if_needed(p) == 0) {
-        res.hasError = true;
-        res.errorCode = ERROR_EOF;
-        sprintf(res.errorMessage, "Unexpected end of file");
-        return res;
-    }
-    // fprintf(stderr, "read character: %c\n", p->buffer[p->bufferCursor]);
-    if (p->buffer[p->bufferCursor] == c) {
-        p->bufferCursor++;
-        p->totalCharacterCount++;
-        p->column++;
-        if (c == '\n') {
-            p->column = 1;
-            p->line++;
-        }
-        res.hasError = false;
-        res.character = c;
-    } else {
-        res.errorCode = ERROR_UNEXPECTED_CHARACTER;
-        res.hasError = true;
-        res.actualCharacter = c;
-        sprintf(res.errorMessage, "Expected %c, got '%c'\n", c, p->buffer[p->bufferCursor]);
-    }
-    return res;
-}
-
-readResult read_one_of_characters(parser* p, char* cs) {
-    readResult res;
-    if (read_buffer_if_needed(p) == 0) {
-        res.hasError = true;
-        res.errorCode = ERROR_EOF;
-        sprintf(res.errorMessage, "Unexpected end of file");
-        return res;
-    }
-    char c = p->buffer[p->bufferCursor];
-    // fprintf(stderr, "read one of characters: %c\n", c);
-    // fprintf(stderr, "got character %c\n", c);
-    for (int i = 0; i < strlen(cs); ++i) {
-        char t = cs[i];
-        // fprintf(stderr, "target character %c\n", t);
-        if (c == t) {
-            p->bufferCursor++;
-            p->totalCharacterCount++;
-            p->column++;
-            if (c == '\n') {
-                p->column = 1;
-                p->line++;
-            }
-            res.hasError = false;
-            res.character = c;
-            // fprintf(stderr, "wanted character\n");
-            return res;
-        }
-    }
-    // fprintf(stderr, "unwanted character\n");
-    res.hasError = true;
-    res.actualCharacter = c;
-    res.errorCode = ERROR_UNEXPECTED_CHARACTER;
-    // this message should be overriden by more specific error messages
-    sprintf(res.errorMessage, "Unexpected character '%c'", res.actualCharacter);
-    return res;
-}
-
-readResult read_digit(parser* p) {
-    // fprintf(stderr, "buffer cursor (C): %d\n", p->bufferCursor);
-    readResult res = read_one_of_characters(p, "0123456789");
-    if (res.hasError) {
-        if (res.errorCode == ERROR_UNEXPECTED_CHARACTER) {
-            // fprintf(stderr, "digit error\n");
-            sprintf(res.errorMessage, "Expected a digit, got '%c'", res.actualCharacter);
-            return res;
-        } else {
-            return res;
-        }
-    }
-    // fprintf(stderr, "digit no error\n");
-    res.digit = res.character - '0';
-    return res;
-}
-
-readResult read_integer(parser* p) {
-    readResult res = read_digit(p);
-    if (res.hasError) {
-        if (res.errorCode == ERROR_UNEXPECTED_CHARACTER) {
-            sprintf(res.errorMessage, "Expected a number, got '%c'\n", res.actualCharacter);
-            return res;
-        } else {
-            return res;
-        }
-    }
-    res.integer = res.digit;
-    // fprintf(stderr, "initial integer is %d\n", res.integer);
-    readResult tempRes = read_digit(p);
-    while (!tempRes.hasError) {
-        // fprintf(stderr, "new digit %d, now integer is %d\n", tempRes.digit, res.integer);
-        res.integer *= 10;
-        res.integer += tempRes.digit;
-        tempRes = read_digit(p);
-    }
-    return res;
-}
-
-readResult read_chess_file(parser* p) {
-    readResult res = read_one_of_characters(p, "abcdefgh");
-    if (res.hasError) {
-        sprintf(res.errorMessage, "Expected a rank (1-8), got %d\n", res.actualCharacter);
-        return res;
-    }
-    switch (res.character) {
-        case 'a':
-            res.file = aFile;
-            break;
-        case 'b':
-            res.file = bFile;
-            break;
-        case 'c':
-            res.file = cFile;
-            break;
-        case 'd':
-            res.file = dFile;
-            break;
-        case 'e':
-            res.file = eFile;
-            break;
-        case 'f':
-            res.file = fFile;
-            break;
-        case 'g':
-            res.file = gFile;
-            break;
-        case 'h':
-            res.file = hFile;
-            break;
-        default:
-            fprintf(stderr, "unexpected chess file character when converting to enum: %c\n", res.character);
-            exit(1);
-    }
-    res.file = res.character;
-    return res;
-}
-
-readResult read_rank(parser* p) {
-    readResult res = read_digit(p);
-    if (res.hasError) {
-        // fprintf(stderr, "rank error\n");
-        sprintf(res.errorMessage, "Expected a rank, got '%c'", res.actualCharacter);
-        return res;
-    } else if (res.digit == 9) {
-        sprintf(res.errorMessage, "9 is not a valid rank (1-8)");
-        return res;
-    }
-    // fprintf(stderr, "rank no error\n");
-    res.rank = res.digit;
-    return res;
-}
-
-readResult read_piece(parser* p) {
-    readResult res = read_one_of_characters(p, "NBRQK");
-    if (res.hasError) {
-        sprintf(res.errorMessage, "Expected a piece symbol (N,B,R,Q,K), got '%c'", res.actualCharacter);
-        return res;
-    }
-    switch (res.character) {
-        case 'N':
-            res.piece = knight;
-            break;
-        case 'B':
-            res.piece = bishop;
-            break;
-        case 'R':
-            res.piece = rook;
-            break;
-        case 'Q':
-            res.piece = queen;
-            break;
-        case 'K':
-            res.piece = king;
-            break;
-        default:
-            fprintf(stderr, "Unexpected symbol %c when matching piece symbol\n", res.character);
-            break;
-    }
-    return res;
-}
-
-readResult read_capture(parser* p) {
-    return read_character(p, 'x');
-}
-
-readResult read_check(parser* p) {
-    return read_character(p, '+');
-}
-
-readResult read_checkmate(parser* p) {
-    return read_character(p, '#');
-}
-
-readResult read_whitespace(parser* p) {
-    // fprintf(stderr, "read_whitespace()\n");
-    readResult res = read_one_of_characters(p, " \t\n");
-    readResult tmp;
-    do {
-        tmp = read_one_of_characters(p, " \t\n");
-    } while (!tmp.hasError);
-    return res;
-}
-
-readResult read_tab(parser* p) {
-    return read_character(p, '\t');
-}
-
-readResult read_promotion_symbol(parser* p) {
-    return read_character(p, '=');
-}
-
-readResult read_castling_symbol(parser* p) {
-    return read_character(p, 'O');
-}
-
-readResult read_dash(parser* p) {
-    return read_character(p, '-');
-}
-
-readResult read_tag_open(parser* p) {
-    return read_character(p, '[');
-}
-
-readResult read_tag_close(parser* p) {
-    return read_character(p, ']');
-}
-
-readResult read_tag_name(parser* p) {
-    readResult res;
-    int i = 0;
-    bool done = false;
-    do {
-        readResult tmp = read_one_of_characters(p, "abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ");
-        if (tmp.hasError) {
-            done = true;
-            break;
-        }
-        // fprintf(stderr, "got character %c\n", tmp.character);
-        res.tagName[i++] = tmp.character;
-    } while (!done);
-    res.tagName[i++] = 0;
-    res.hasError = false;
-    return res;
-}
-
-readResult read_quoted_string(parser* p) {
-    readResult res;
-    readResult tmp = read_character(p, '"');
-    if (tmp.hasError) {
-        return tmp;
-    }
-    int i = 0;
-    bool escaped = false;
-    do {
-        tmp = read_any_character(p);
-        if (!escaped && tmp.character == '"') {
-            break;
-        }
-        if (!escaped && tmp.character == '\\') {
-            escaped = true;
-            continue;
-        }
-        res.string[i++] = tmp.character;
-        if (escaped) {
-            escaped = false;
-        }
-    } while (!res.hasError);
-
-    res.string[i++] = 0;
-    res.hasError = false;
     return res;
 }
 
@@ -779,338 +360,6 @@ gameState* parse_fen(char* record) {
     return game;
 }
 
-parseResult parse_until(parser* p, parserState untilState) {
-    // fprintf(stderr, "parse_until()\n");
-    int digit;
-    int decisionLevel = 0;
-    readResult res;
-    moveTree* newMove;
-    move* currentMove = p->moveTreeTip->move;
-    parserAttempt newAttempt;
-
-    if (read_buffer_initial(p) <= 0) {
-        return make_parse_error(p, "cannot read file");
-    }
-
-    char errorMessage[256];
-    sprintf(errorMessage, "");
-    bool failed = false;
-
-    while (p->state != untilState) {
-        // fprintf(stderr, "State: %s Line: %d Column: %d Buffer offset: %d\n", state_to_string(p->state), p->line, p->column, p->bufferCursor);
-        if (strcmp(errorMessage, "") != 0) {
-            // got error, see if we need to backtrack
-            parserAttempt* att = pop_attempt(&p->attemptStack);
-            if (att != NULL) {
-                // NOTE: the attempts must not have altered move tree
-                int shiftAmount = p->totalCharacterCount - att->initialCharacterCount;
-                // fprintf(stderr, "Attempt failed due to \"%s\", backtracking to state %s and shifting input by %d\n", errorMessage, state_to_string(att->stateOnFailure), shiftAmount);
-                p->state = att->stateOnFailure;
-                p->line = att->line;
-                p->column = att->column;
-                p->bufferCursor -= shiftAmount;
-                p->totalCharacterCount -= shiftAmount;
-                sprintf(errorMessage, "");
-            } else {
-                return make_parse_error(p, errorMessage);
-            }
-        }
-        switch (p->state) {
-            case startState:
-                p->state = parseTagState;
-                break;
-            case parseTagState:
-                res = read_whitespace(p);
-                res = read_tag_open(p);
-                if (res.hasError) {
-                    p->state = parseMoveNumberOrProbabilityState;
-                    continue;
-                }
-                res = read_tag_name(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                char tagName[256];
-                strncpy(tagName, res.tagName, 256);
-                // fprintf(stderr, "got tag %s\n", tagName);
-                res = read_whitespace(p);
-                res = read_quoted_string(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                // fprintf(stderr, "got tag %s\n", tagName);
-                if (strcmp(tagName, "FEN") == 0) {
-                    // fprintf(stderr, "GOT FEN\n");
-                    free(p->initGameState);
-                    p->initGameState = parse_fen(res.string);
-                }
-                res = read_tag_close(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                }
-                break;
-            case beginParseMoveState:
-                newMove = new_move_tree();
-                if (!newMove) {
-                    sprintf(errorMessage, "failed to allocate memory for new move");
-                    continue;
-                }
-                newMove->decisionLevel = decisionLevel;
-                newMove->fullMoveNo = currentMove->side == white ? p->moveTreeTip->fullMoveNo : p->moveTreeTip->fullMoveNo + 1;
-                newMove->move->side = currentMove->side == white ? black : white;
-                append_move(p->moveTreeTip, newMove);
-                p->moveTreeTip = newMove;
-                p->state = parseProbabilityState;
-                currentMove = p->moveTreeTip->move;
-                break;
-            case parseMoveNumberOrProbabilityState:
-                newAttempt.line = p->line;
-                newAttempt.column = p->column;
-                newAttempt.initialCharacterCount = p->totalCharacterCount;
-                newAttempt.stateOnFailure = beginParseMoveState;
-                push_attempt(&p->attemptStack, newAttempt);
-                p->state = parseMoveNumberState;
-                break;
-            case parseMoveNumberState:
-                res = read_integer(p);
-                if (res.hasError) {
-                    if (res.errorCode == ERROR_EOF) {
-                        p->state = endState;
-                        continue;
-                    }
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                int goToMove = res.integer;
-                if (goToMove < 1) {
-                    sprintf(errorMessage, "Move number cannot be less than 1, got %d\n", goToMove);
-                }
-                res = read_character(p, '.');
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                playerSide side = white;
-                res = read_character(p, '.');
-                if (!res.hasError) {
-                    res = read_character(p, '.');
-                    if (res.hasError) {
-                        sprintf(errorMessage, "%s", res.errorMessage);
-                        continue;
-                    }
-                    side = black;
-                }
-                res = read_whitespace(p);
-
-                // move tree tip to previous from target, not target
-                if (side == black) {
-                    side = white;
-                } else {
-                    side = black;
-                    goToMove--;
-                }
-
-                if (goToMove > p->moveTreeTip->fullMoveNo) {
-                    sprintf(errorMessage, "Skipped move number. Current move number: %d, got %d\n", p->moveTreeTip->fullMoveNo, goToMove);
-                    continue;
-                }
-
-                // fprintf(stderr, "moving %d -> %d\n", p->moveTreeTip->fullMoveNo, goToMove);
-
-                while (goToMove < p->moveTreeTip->fullMoveNo || side != p->moveTreeTip->move->side) {
-                    p->moveTreeTip = p->moveTreeTip->previousMove;
-                    currentMove = p->moveTreeTip->move;
-                }
-
-                p->state = beginParseMoveState;
-                break;
-            case parseProbabilityState:
-                res = read_integer(p);
-                if (!res.hasError) {
-                    p->moveTreeTip->probability = res.integer;
-                    res = read_character(p, '%');
-                    if (res.hasError) {
-                        sprintf(errorMessage, "%s", res.errorMessage);
-                        continue;
-                    }
-                    res = read_whitespace(p);
-                    if (res.hasError) {
-                        sprintf(errorMessage, "%s", res.errorMessage);
-                        continue;
-                    }
-                } else {
-                    // fprintf(stderr, "probability error %s\n", res.errorMessage);
-                    p->moveTreeTip->probability = 100;
-                }
-                // fprintf(stderr, "move probability %d\n", p->moveTreeTip->probability);
-                p->state = parseAlgebraicNotation;
-                pop_attempt(&p->attemptStack);
-                break;
-            case parseAlgebraicNotation:
-                res = read_castling_symbol(p);
-                if (!res.hasError) {
-                    res = read_dash(p);
-                    if (!res.hasError) {
-                        p->state = parseShortCastlingState;
-                    } else {
-                        sprintf(errorMessage, "%s", res.errorMessage);
-                        continue;
-                    }
-                } else {
-                    p->state = parseDepartureOrDestinationState;
-                }
-                break;
-            case parseShortCastlingState:
-                res = read_castling_symbol(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                res = read_dash(p);
-                if (!res.hasError) {
-                    p->state = parseLongCastlingState;
-                } else {
-                    currentMove->piece = king;
-                    currentMove->sidedPiece = currentMove->side == white ? whiteKing : blackKing;
-                    currentMove->isShortCastling = true;
-                    p->state = finishParseMoveState;
-                }
-                break;
-            case parseLongCastlingState:
-                res = read_castling_symbol(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                currentMove->piece = king;
-                currentMove->sidedPiece = currentMove->side == white ? whiteKing : blackKing;
-                currentMove->isLongCastling = true;
-                p->state = finishParseMoveState;
-                break;
-            case parseDepartureOrDestinationState:
-                // fprintf(stderr, "decision point: departure or destination\n");
-                newAttempt.line = p->line;
-                newAttempt.column = p->column;
-                newAttempt.initialCharacterCount = p->totalCharacterCount;
-                newAttempt.stateOnFailure = noDepartureState;
-                push_attempt(&p->attemptStack, newAttempt);
-                p->state = parseDepartureFileState;
-                break;
-            case noDepartureState:
-                currentMove->departurePosition.file = currentMove->departurePosition.rank = 0;
-                p->state = parseMoveDestinationState;
-                break;
-            case parseDepartureFileState:
-                res = read_chess_file(p);
-                if (!res.hasError) {
-                    currentMove->departurePosition.file = res.file;
-                }
-                p->state = parseDepartureRankState;
-                break;
-            case parseDepartureRankState:
-                res = read_rank(p);
-                if (!res.hasError) {
-                    currentMove->departurePosition.rank = res.rank;
-                }
-                p->state = parseMovePieceState;
-                break;
-            case parseMovePieceState:
-                res = read_piece(p);
-                if (!res.hasError) {
-                    currentMove->piece = res.piece;
-                    currentMove->sidedPiece = currentMove->side == white ? res.piece : -res.piece;
-                } else {
-                    currentMove->piece = pawn;
-                    currentMove->sidedPiece = currentMove->side == white ? whitePawn : blackPawn;
-                }
-                p->state = parseMoveCaptureState;
-                break;
-            case parseMoveCaptureState:
-                res = read_capture(p);
-                if (!res.hasError) {
-                    currentMove->isCapture = 1;
-                }
-                p->state = parseMoveDestinationState;
-                break;
-            case parseMoveDestinationState:
-                // fprintf(stderr, "buffer cursor (A): %d\n", p->bufferCursor);
-                res = read_chess_file(p);
-                if (!res.hasError) {
-                    currentMove->destination.file = res.file;
-                    // fprintf(stderr, "got file %d\n", res.file);
-                } else {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                // fprintf(stderr, "buffer cursor (B): %d\n", p->bufferCursor);
-                res = read_rank(p);
-                if (!res.hasError) {
-                    currentMove->destination.rank = res.rank;
-                } else {
-                    // fprintf(stderr, "parsemovedestination error\n");
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                // no need to go back to this anymore
-                pop_attempt(&p->attemptStack);
-                p->state = parseMovePromotionState;
-                break;
-            case parseMovePromotionState:
-                res = read_promotion_symbol(p);
-                if (!res.hasError) {
-                    res = read_piece(p);
-                    if (!res.hasError) {
-                        currentMove->promoteTo = res.piece;
-                    } else {
-                        sprintf(errorMessage, "Expected type of piece to promote to, got '%c'", res.actualCharacter);
-                        continue;
-                    }
-                }
-                p->state = parseMoveCheckState;
-                break;
-            case parseMoveCheckState:
-                res = read_check(p);
-                if (!res.hasError) {
-                    currentMove->isCheck = true;
-                    p->state = finishParseMoveState;
-                } else {
-                    p->state = parseMoveCheckmateState;
-                }
-                break;
-            case parseMoveCheckmateState:
-                res = read_checkmate(p);
-                if (!res.hasError) {
-                    currentMove->isCheckmate = true;
-                }
-                p->state = finishParseMoveState;
-                break;
-            case finishParseMoveState:
-                p->state = parseWhitespaceState;
-                break;
-            case parseWhitespaceState:
-                res = read_whitespace(p);
-                if (res.hasError) {
-                    sprintf(errorMessage, "%s", res.errorMessage);
-                    continue;
-                }
-                while (!res.hasError && res.character != '\n') {
-                    res = read_whitespace(p);
-                }
-                p->state = parseMoveNumberOrProbabilityState;
-                break;
-            case endState:
-                break;
-            default:
-                fprintf(stderr, "Unexpected parser state\n");
-                exit(1);
-                // error
-                break;
-        }
-    }
-    return make_parse_parser_result(p);
-}
 
 typedef struct {
     bool hasError;
@@ -1125,13 +374,11 @@ typedef struct {
 
 char* lexBuffer = NULL;
 lexResult lexical_analysis(char* buffer) {
-    fprintf(stderr, "lex buffer initial %s\n", buffer);
     lexResult res;
     res.number = res.hasError = 0;
     if (buffer != NULL) {
         lexBuffer = buffer;
     }
-    fprintf(stderr, "lexbuffer initial %s\n", lexBuffer);
     // ignore whitespace
     while (*lexBuffer == ' ' || *lexBuffer == '\t' || *lexBuffer == '\n') {
         lexBuffer = lexBuffer + 1;
@@ -1166,7 +413,6 @@ lexResult lexical_analysis(char* buffer) {
                 i++;
                 break;
             }
-            fprintf(stderr, "in quoted string got char %c\n", c);
             res.token[i-1] = c;
             i++;
         }
@@ -1174,7 +420,6 @@ lexResult lexical_analysis(char* buffer) {
         return res;
     }
 
-    fprintf(stderr, "lexbuffer before parse %s\n", lexBuffer);
     while (i < strlen(lexBuffer) && lexBuffer[i] != ' ' && lexBuffer[i] != '\t' && lexBuffer[i] != '\n') {
         res.token[i] = lexBuffer[i];
         i++;
@@ -1185,9 +430,6 @@ lexResult lexical_analysis(char* buffer) {
         return res;
     }
     lexBuffer += strlen(res.token);
-    fprintf(stderr, "got token %s\n", res.token);
-    fprintf(stderr, "lexbuffer after parse %s\n", lexBuffer);
-    fprintf(stderr, "token length=%ld, last=%c\n", strlen(res.token), res.token[strlen(res.token)-1]);
     if (strlen(res.token) > 1 && res.token[strlen(res.token)-1] == '.') {
         res.tokenType = fullMoveToken;
         res.number = atoi(res.token);
@@ -1200,7 +442,6 @@ lexResult lexical_analysis(char* buffer) {
     }
     // else
     res.tokenType = symbolToken;
-    fprintf(stderr, "got token type %d\n", res.tokenType);
     return res;
 }
 
@@ -1222,7 +463,7 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
         }
     }
     if (destinationIndex == -1) {
-        fprintf(stderr, "missing destination\n");
+        // fprintf(stderr, "missing destination\n");
         return NULL;
     }
     int i = 0;
@@ -1231,7 +472,7 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
     if (buffer[i] >= 'B' && buffer[i] <= 'R') {
         m->piece = pieceLookup[buffer[i++] - 'B'];
         if (m->piece == -1) {
-            fprintf(stderr, "invalid piece\n");
+            // fprintf(stderr, "invalid piece\n");
             return NULL;
         }
     } else {
@@ -1256,7 +497,7 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
     if (buffer[i] == '=' && (buffer[i+1] >= 'B' && buffer[i+1] <= 'R')) {
         m->promoteTo = pieceLookup[buffer[i+1] - 'B'];
         if (m->promoteTo <= 0) {
-            fprintf(stderr, "invalid promotion\n");
+            // fprintf(stderr, "invalid promotion\n");
             return NULL;
         }
         i += 2;
@@ -1269,7 +510,7 @@ move* parse_algebraic_notation2(move* m, char* buffer) {
         i++;
     }
     if (i != strlen(buffer)) {
-        fprintf(stderr, "not fully parsed %d vs %ld\n", i, strlen(buffer));
+        // fprintf(stderr, "not fully parsed %d vs %ld\n", i, strlen(buffer));
         return NULL;
     }
     return m;
@@ -1288,21 +529,18 @@ parseResult simple_parse(parser* p) {
     p->moveTreeTip->move->side = black; // initialize
     lexResult res;
     while (true) {
-        fprintf(stderr, "STATE: %d\n", state);
+        // fprintf(stderr, "STATE: %d\n", state);
         if (startLine == 1) {
             res = lexical_analysis(buffer);
         } else {
-            fprintf(stderr, "CONTINUE\n");
             res = lexical_analysis(NULL);
         }
 
         startLine = 0;
-        fprintf(stderr, "lex result type: %d (len=%ld)\n", res.tokenType, strlen(res.token));
         if (res.eol) {
-            fprintf(stderr, "EOL**\n");
             p->line++;
             char* buf = fgets(buffer, BUFFER_SIZE, p->file);
-            fprintf(stderr, "got new buffer:%s\n", buf);
+            // fprintf(stderr, "got new buffer:%s\n", buf);
             if (buf == NULL && state == 10) {
                 break;
             }
@@ -1320,7 +558,6 @@ parseResult simple_parse(parser* p) {
 
         if ((state == 0 || state == 1) && res.tokenType != openTagToken) {
             state = 10;
-            fprintf(stderr, "STATE: %d\n", state);
         } else if (state == 0 || state == 1) {
             state = 2;
             continue;
@@ -1341,7 +578,6 @@ parseResult simple_parse(parser* p) {
                 sprintf(errorMessage, "Expected tag value, got %s", res.token);
                 return make_parse_error(p, errorMessage);
             }
-            fprintf(stderr, "parse_fen %ld", strlen(res.token));
             p->initGameState = parse_fen(res.token);
             p->moveTreeRoot->move->side = p->initGameState->sidePlaying == white ? black : white;
             state = 4;
@@ -1359,14 +595,11 @@ parseResult simple_parse(parser* p) {
 
         if (state == 10 && res.tokenType != fullMoveToken) {
             state = 11;
-            fprintf(stderr, "debug: .%s.\n", res.token);
-            fprintf(stderr, "STATE: %d\n", state);
         } else if (state == 10) {
             int targetHalfMoveNo = 2*(res.number-1)+1;
             if (res.side == black) {
                 targetHalfMoveNo += 1;
             }
-            fprintf(stderr, "target side %d", res.side);
             if (targetHalfMoveNo == p->moveTreeTip->halfMoveNo + 1) {
                 continue;
             } else if (targetHalfMoveNo > p->moveTreeTip->halfMoveNo + 1) {
@@ -1374,7 +607,7 @@ parseResult simple_parse(parser* p) {
                 return make_parse_error(p, errorMessage);
             }
             // else backtrack to that move
-            fprintf(stderr, "moving %d -> %d", p->moveTreeTip->halfMoveNo, targetHalfMoveNo - 1);
+            // fprintf(stderr, "moving %d -> %d", p->moveTreeTip->halfMoveNo, targetHalfMoveNo - 1);
             while (p->moveTreeTip->halfMoveNo > targetHalfMoveNo - 1) {
                 p->moveTreeTip = p->moveTreeTip->previousMove;
             }
@@ -1384,7 +617,6 @@ parseResult simple_parse(parser* p) {
         if (state == 11 && res.tokenType != probabilityToken) {
             p->moveTreeTip->probability = 100;
             state = 12;
-            fprintf(stderr, "STATE: %d\n", state);
         } else if (state == 11) {
             p->moveTreeTip->probability = res.number;
             state = 12;
@@ -1398,7 +630,6 @@ parseResult simple_parse(parser* p) {
             moveTree* t = new_move_tree();
             t->fullMoveNo = p->moveTreeTip->move->side == white ? p->moveTreeTip->fullMoveNo : p->moveTreeTip->fullMoveNo + 1;
             t->halfMoveNo = p->moveTreeTip->halfMoveNo + 1;
-            fprintf(stderr, "NEW HALF MOVE NO: %d\n", t->halfMoveNo);
             t->move->side = p->moveTreeTip->move->side == white ? black : white;
             t->move = parse_algebraic_notation2(t->move, res.token);
             t->move->sidedPiece = t->move->side == white ? t->move->piece : -(t->move->piece);
@@ -1414,80 +645,6 @@ parseResult simple_parse(parser* p) {
     }
 
     return make_parse_parser_result(p);
-}
-
-move* parse_algebraic_notation3(char* buffer) {
-    regmatch_t pmatch[10];
-    regex_t regex;
-    for (int i = 0; i < 10; ++i) {
-        pmatch[i].rm_so = pmatch[i].rm_eo = 0;
-    }
-    if (regcomp(&regex, "^([RBQKPN])?([a-h])?([1-8])?([x])?([a-h])([1-8])([=])?([QNRB])?([+#]?)$", REG_EXTENDED) != 0) {
-        fprintf(stderr, "Failed compiling regular expression.\n");
-        exit(1);
-    }
-    int status = regexec(&regex, buffer, 10, pmatch, 0);
-    if (status != 0) {
-        return NULL;
-    }
-    move* m = new_move();
-    int8_t pieceLookupMod10[] = {0, 4, 3, -1, 5, -1, 2, -1, 1, -1};
-    if (MATCHED(pmatch, 1)) {
-        m->piece = pieceLookupMod10[buffer[pmatch[1].rm_so] % 10] + 1;
-    } else {
-        m->piece = pawn;
-    }
-    if (MATCHED(pmatch, 2)) {
-        m->departurePosition.file = buffer[pmatch[2].rm_so] - 'a' + 1;
-    }
-    if (MATCHED(pmatch, 3)) {
-        m->departurePosition.rank = buffer[pmatch[3].rm_so] - '1' + 1;
-    }
-    if (MATCHED(pmatch, 4)) {
-        m->isCapture = true;
-    }
-    m->destination.file = buffer[pmatch[5].rm_so] - 'a' + 1;
-    m->destination.rank = buffer[pmatch[6].rm_so] - '1' + 1;
-    if (MATCHED(pmatch, 7)) {
-        if (MATCHED(pmatch, 8)) {
-            m->promoteTo = pieceLookupMod10[buffer[pmatch[8].rm_so] % 10] + 1;
-        } else {
-            m->promoteTo = queen;
-        }
-    }
-    if (MATCHED(pmatch, 9)) {
-        if (buffer[pmatch[9].rm_so] == '#') {
-            m->isCheckmate = true;
-        } else {
-            m->isCheck = true;
-        }
-    }
-    return m;
-}
-
-parseResult parse_algebraic_notation(char* buffer) {
-    FILE* memfile;
-    memfile = fmemopen(buffer, strlen(buffer), "r");
-
-    parser p = make_parser(memfile);
-    p.state = parseAlgebraicNotation;
-    parseResult res = parse_until(&p, finishParseMoveState);
-    fclose(memfile);
-
-    if (!res.hasError && p.totalCharacterCount != strlen(buffer)) {
-        return make_parse_error(&p, "Invalid characters after move notation.\n");
-    }
-
-    if (!res.hasError) {
-        return make_parse_move_result(res.parser->moveTreeRoot->move);
-    }
-
-    return res;
-}
-
-parseResult parse_variants(FILE* file) {
-    parser p = make_parser(file);
-    return parse_until(&p, endState);
 }
 
 void print_position(position pos) {
@@ -1894,8 +1051,9 @@ void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) 
 
             buffer[strcspn(buffer, "\n")] = 0;
 
-            parseResult res = parse_algebraic_notation(buffer);
-            if (res.hasError) {
+            move*m = new_move();
+            m = parse_algebraic_notation2(m, buffer);
+            if (m == NULL) {
                 //fprintf(stderr, "Failed to parse: %s\n", res.errorMessage);
                 print_do_not_understand();
                 continue;
@@ -1903,7 +1061,7 @@ void play(moveTree* tree, gameState* game, playerSide userSide, bool blindMode) 
 
             // printf("got move:\n");
             // print_algebraic_notation(res.moveTreeRoot);
-            moveTree* goToMove = tree_apply_move(moveTreeTip, res.move);
+            moveTree* goToMove = tree_apply_move(moveTreeTip, m);
             if (goToMove == NULL) {
                 wprintf(L"wrong move! try again:\n");
             } else {
@@ -1967,31 +1125,6 @@ int main(int argc, char *argv[]) {
     options options = parse_options(argc, argv);
 
     FILE* fp = fopen(options.inputPath, "r");
-    /*
-    parseResult res = parse_variants(fp);
-    if (res.hasError) {
-        fprintf(stderr, "%s", res.errorMessage);
-        return 1;
-    }
-    */
-    // print_tree(res.moveTreeRoot->firstChoice);
-    // play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
-    move*m = new_move();
-    m = parse_algebraic_notation2(m, "Nd2xa8=Q#");
-    // print_algebraic_notation(m);
-
-    /*
-    char buffer[256];
-    strcpy(buffer, "    2... 33% Nf6 O-O Nxe4 4. Re1");
-    lexResult r = lexical_analysis(buffer);
-    while (!r.eol) {
-        fprintf(stderr, "token type=%d\n", r.tokenType);
-        if (r.tokenType == symbolToken || r.tokenType == quotedStringToken) {
-            fprintf(stderr, "symbol=%s\n", r.token);
-        }
-        r = lexical_analysis(NULL);
-    }
-    */
 
     parser p = make_parser(fp);
     parseResult res = simple_parse(&p);
