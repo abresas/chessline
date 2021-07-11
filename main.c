@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <math.h>
 #include <locale.h>
 #include <wchar.h>
+#include <regex.h>
 
 #define BUFFER_SIZE 256
 // backtrack needed because what may look like a departure position may be destination position
@@ -31,6 +33,7 @@
 #define ERROR_UNEXPECTED_CHARACTER 2
 
 #define EMPTY_ROW { empty, empty, empty, empty, empty, empty, empty, empty }
+#define MATCHED(p,i) (p[i].rm_so != (size_t)-1 && p[i].rm_so != p[i].rm_eo)
 
 typedef enum {white, black} playerSide;
 typedef enum {pawn=1, knight=2, bishop=3, rook=4, queen=5, king=6} pieceEnum;
@@ -1107,6 +1110,64 @@ parseResult parse_until(parser* p, parserState untilState) {
     return make_parse_parser_result(p);
 }
 
+void simple_parse(parser* p, char* buffer) {
+    // while more tags: read tag
+    // while more move nodes:
+    //  read move number with dot(s) (optional)
+    //  read probability with % (optional)
+    //  read algebraic notation
+    // at every step, increase parser column and line
+}
+
+move* parse_algebraic_notation2(char* buffer) {
+    regmatch_t pmatch[10];
+    regex_t regex;
+    for (int i = 0; i < 10; ++i) {
+        pmatch[i].rm_so = pmatch[i].rm_eo = 0;
+    }
+    if (regcomp(&regex, "^([RBQKPN])?([a-h])?([1-8])?([x])?([a-h])([1-8])([=])?([QNRB])?([+#]?)$", REG_EXTENDED) != 0) {
+        fprintf(stderr, "Failed compiling regular expression.\n");
+        exit(1);
+    }
+    int status = regexec(&regex, buffer, 10, pmatch, 0);
+    if (status != 0) {
+        return NULL;
+    }
+    move* m = new_move();
+    int8_t pieceLookupMod10[] = {0, 4, 3, -1, 5, -1, 2, -1, 1, -1};
+    if (MATCHED(pmatch, 1)) {
+        m->piece = pieceLookupMod10[buffer[pmatch[1].rm_so] % 10] + 1;
+    } else {
+        m->piece = pawn;
+    }
+    if (MATCHED(pmatch, 2)) {
+        m->departurePosition.file = buffer[pmatch[2].rm_so] - 'a' + 1;
+    }
+    if (MATCHED(pmatch, 3)) {
+        m->departurePosition.rank = buffer[pmatch[3].rm_so] - '1' + 1;
+    }
+    if (MATCHED(pmatch, 4)) {
+        m->isCapture = true;
+    }
+    m->destination.file = buffer[pmatch[5].rm_so] - 'a' + 1;
+    m->destination.rank = buffer[pmatch[6].rm_so] - '1' + 1;
+    if (MATCHED(pmatch, 7)) {
+        if (MATCHED(pmatch, 8)) {
+            m->promoteTo = pieceLookupMod10[buffer[pmatch[8].rm_so] % 10] + 1;
+        } else {
+            m->promoteTo = queen;
+        }
+    }
+    if (MATCHED(pmatch, 9)) {
+        if (buffer[pmatch[9].rm_so] == '#') {
+            m->isCheckmate = true;
+        } else {
+            m->isCheck = true;
+        }
+    }
+    return m;
+}
+
 parseResult parse_algebraic_notation(char* buffer) {
     FILE* memfile;
     memfile = fmemopen(buffer, strlen(buffer), "r");
@@ -1183,6 +1244,9 @@ void print_piece(pieceEnum p) {
         case king:
             wprintf(L"K");
             break;
+        default:
+            fprintf(stderr, "Unexpected piece in move: %d\n", p);
+            exit(1);
     }
 }
 
@@ -1195,10 +1259,10 @@ void print_algebraic_notation(move* m) {
         wprintf(L"O-O-O");
         return;
     }
+    print_piece(m->piece);
     if (m->departurePosition.file || m->departurePosition.rank) {
         print_position(m->departurePosition);
     }
-    print_piece(m->piece);
     if (m->isCapture) {
         wprintf(L"x");
     }
@@ -1610,5 +1674,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     // print_tree(res.moveTreeRoot->firstChoice);
-    play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
+    // play(res.parser->moveTreeRoot, res.parser->initGameState, options.playerSide, options.blindMode);
+    move*m = parse_algebraic_notation2("Nd2xa8=Q#");
+    print_algebraic_notation(m);
 }
